@@ -1,0 +1,30 @@
+{
+  "name": "snip36-pp-onekey-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "@onekeyfe/hd-web-sdk": "^1.1.23",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "starknet": "github:starkware-libs/starknet.js#PRIVACY-0.14.2-RC.2",
+    "viem": "^2.47.11"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^4.2.2",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.1",
+    "vite-plugin-node-polyfills": "^0.26.0"
+  }
+}
