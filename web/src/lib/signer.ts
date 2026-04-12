@@ -18,6 +18,7 @@ import {
   ec,
   typedData as starknetTypedData,
 } from 'starknet';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { signWithOneKey } from './onekey';
 
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
@@ -35,11 +36,38 @@ function intDAM(dam: unknown): number {
   return 0;
 }
 
+function normalizeSecpPublicKeyHex(publicKeyHex: string): string {
+  const clean = publicKeyHex.replace(/^0x/i, '').toLowerCase();
+  if (!clean || !/^[0-9a-f]+$/.test(clean)) {
+    throw new Error('OneKey returned an invalid secp256k1 public key.');
+  }
+  if (clean.length === 66) {
+    return secp256k1.Point.fromHex(clean).toHex(false);
+  }
+  if (clean.length === 128) {
+    return '04' + clean;
+  }
+  if (clean.length === 130) {
+    return clean;
+  }
+  throw new Error(
+    `Unsupported secp256k1 public key length from OneKey: expected 33-byte or 65-byte key, got ${clean.length / 2} bytes.`,
+  );
+}
+
+function normalizeScalarHex(value: string, label: 'r' | 's'): string {
+  const clean = value.replace(/^0x/i, '').toLowerCase();
+  if (!clean || !/^[0-9a-f]+$/.test(clean)) {
+    throw new Error(`OneKey returned an invalid ${label} value while signing.`);
+  }
+  return clean;
+}
+
 /**
  * Compute Poseidon pubkey_hash from uncompressed secp256k1 public key hex.
  */
 export function pubkeyToPoseidonHash(publicKeyHex: string): string {
-  const hex = publicKeyHex.startsWith('0x') ? publicKeyHex.slice(2) : publicKeyHex;
+  const hex = normalizeSecpPublicKeyHex(publicKeyHex);
   const start = hex.startsWith('04') ? 2 : 0;
   const xHex = hex.slice(start, start + 64);
   const yHex = hex.slice(start + 64, start + 128);
@@ -128,8 +156,8 @@ export class OneKeyHardwareSigner implements SignerInterface {
     const messageHex = txHash.replace(/^0x/i, '').padStart(64, '0');
     const rawSig = await signWithOneKey(messageHex, this.accountIndex);
 
-    let r = BigInt('0x' + rawSig.r);
-    let s = BigInt('0x' + rawSig.s);
+    let r = BigInt('0x' + normalizeScalarHex(rawSig.r, 'r'));
+    let s = BigInt('0x' + normalizeScalarHex(rawSig.s, 's'));
     let v = rawSig.v;
 
     // Low-s normalization
@@ -141,6 +169,6 @@ export class OneKeyHardwareSigner implements SignerInterface {
     const [rLow, rHigh] = splitU256(r);
     const [sLow, sHigh] = splitU256(s);
 
-    return [rLow, rHigh, sLow, sHigh, v.toString()];
+    return [rLow, rHigh, sLow, sHigh, '0x' + v.toString(16)];
   }
 }

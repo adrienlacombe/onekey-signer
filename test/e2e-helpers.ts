@@ -13,6 +13,7 @@ import {
   Account,
   transaction,
   ec,
+  type SignerInterface,
 } from 'starknet';
 import {
   OneKeyBitcoinSigner,
@@ -256,16 +257,28 @@ export async function executeInvokeTx(params: {
 // Direct Deploy Account (account pays its own gas)
 // ============================================================
 
+export type SignHashFn = (messageHash: string) => Promise<string[]>;
+
+async function signMessageHash(params: {
+  messageHash: string;
+  privateKeyHex: string;
+  scriptType?: ScriptType;
+  signHash?: SignHashFn;
+}): Promise<string[]> {
+  if (params.signHash) {
+    return params.signHash(params.messageHash);
+  }
+  return signStarknetHash(params.privateKeyHex, params.messageHash, params.scriptType);
+}
+
 export async function deployAccountDirect(params: {
   privateKeyHex: string;
   address: string;
   pubkeyHash: string;
+  signer?: SignerInterface;
 }): Promise<string> {
   const provider = getProvider();
-  const signer = new OneKeyBitcoinSigner(
-    params.privateKeyHex,
-    params.pubkeyHash,
-  );
+  const signer = params.signer ?? new OneKeyBitcoinSigner(params.privateKeyHex, params.pubkeyHash);
   const account = new Account({ provider, address: params.address, signer });
 
   const block = (await provider.getBlockWithReceipts('latest')) as any;
@@ -339,6 +352,7 @@ export async function signAndExecuteInvoke(params: {
     calldata: string[];
   }>;
   scriptType?: ScriptType;
+  signHash?: SignHashFn;
 }): Promise<string> {
   const { typedData } = await buildInvokeTx({
     userAddress: params.starknetAddress,
@@ -351,11 +365,12 @@ export async function signAndExecuteInvoke(params: {
   );
   console.log('  Message hash:', messageHash);
 
-  const signature = await signStarknetHash(
-    params.privateKeyHex,
+  const signature = await signMessageHash({
+    privateKeyHex: params.privateKeyHex,
     messageHash,
-    params.scriptType,
-  );
+    scriptType: params.scriptType,
+    signHash: params.signHash,
+  });
   console.log('  Signature (5-felt):', signature);
 
   const txHash = await executeInvokeTx({
@@ -379,12 +394,10 @@ export async function directInvoke(params: {
     entrypoint: string;
     calldata: string[];
   }>;
+  signer?: SignerInterface;
 }): Promise<string> {
   const provider = getProvider();
-  const signer = new OneKeyBitcoinSigner(
-    params.privateKeyHex,
-    params.pubkeyHash,
-  );
+  const signer = params.signer ?? new OneKeyBitcoinSigner(params.privateKeyHex, params.pubkeyHash);
   const account = new Account({
     provider,
     address: params.starknetAddress,
@@ -432,6 +445,7 @@ export async function proveAndExecute(params: {
   clientActions: string[];
   serverActions: string[];
   scriptType?: ScriptType;
+  signHash?: SignHashFn;
 }): Promise<string> {
   if (!PROVING_SERVICE_URL) throw new Error('PROVING_SERVICE_URL not set');
 
@@ -479,11 +493,12 @@ export async function proveAndExecute(params: {
 
   // Sign the tx hash (pool verifies via is_valid_signature on user account)
   console.log('  Signing for proving service...');
-  const signature = await signStarknetHash(
-    params.privateKeyHex,
-    txHash,
-    params.scriptType,
-  );
+  const signature = await signMessageHash({
+    privateKeyHex: params.privateKeyHex,
+    messageHash: txHash,
+    scriptType: params.scriptType,
+    signHash: params.signHash,
+  });
 
   // Send to proving service
   console.log('  Calling proving service...');
@@ -588,11 +603,12 @@ export async function proveAndExecute(params: {
   console.log('  On-chain TX hash:', onchainTxHash);
 
   // Sign the on-chain hash
-  const onchainSig = await signStarknetHash(
-    params.privateKeyHex,
-    onchainTxHash,
-    params.scriptType,
-  );
+  const onchainSig = await signMessageHash({
+    privateKeyHex: params.privateKeyHex,
+    messageHash: onchainTxHash,
+    scriptType: params.scriptType,
+    signHash: params.signHash,
+  });
 
   // Submit via raw RPC with proof_facts + proof
   console.log('  Submitting on-chain...');

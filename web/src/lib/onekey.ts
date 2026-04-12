@@ -5,12 +5,37 @@
 import SDK from '@onekeyfe/hd-web-sdk';
 const HardwareSDK = SDK.HardwareWebSdk;
 import { getBtcDerivationPath } from '../config/constants';
+import {
+  ONEKEY_SIMULATOR_API_BASE,
+  ONEKEY_SIMULATOR_ENABLED,
+  ONEKEY_SIMULATOR_REVIEW_URL,
+} from '../config/constants';
 
 let sdkInitialized = false;
 let currentConnectId: string | null = null;
 let currentDeviceId: string | null = null;
 
+async function simulatorRequest<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${ONEKEY_SIMULATOR_API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? '{}' : JSON.stringify(body),
+  });
+
+  const payload = (await response.json()) as { error?: string } & T;
+  if (!response.ok || payload.error) {
+    throw new Error(payload.error || `Simulator request failed for ${path}`);
+  }
+
+  return payload;
+}
+
+export function isOneKeySimulatorModeEnabled(): boolean {
+  return ONEKEY_SIMULATOR_ENABLED;
+}
+
 export async function initOneKeySDK(): Promise<void> {
+  if (ONEKEY_SIMULATOR_ENABLED) return;
   if (sdkInitialized) return;
   await HardwareSDK.init({
     debug: false,
@@ -24,6 +49,19 @@ export async function connectOneKey(): Promise<{
   connectId: string;
   deviceId: string;
 }> {
+  if (ONEKEY_SIMULATOR_ENABLED) {
+    const device = await simulatorRequest<{
+      connectId?: string;
+      deviceId?: string;
+    }>('/connect');
+    currentConnectId = device.connectId ?? 'simulator';
+    currentDeviceId = device.deviceId ?? null;
+    if (!currentDeviceId) {
+      throw new Error(`Simulator connection failed. Open ${ONEKEY_SIMULATOR_REVIEW_URL} and make sure the emulator is running.`);
+    }
+    return { connectId: currentConnectId, deviceId: currentDeviceId };
+  }
+
   await initOneKeySDK();
   const result = await HardwareSDK.searchDevices();
   if (!result.success || !result.payload?.length) {
@@ -41,9 +79,17 @@ export async function connectOneKey(): Promise<{
 export async function getBtcPublicKey(accountIndex: number = 0): Promise<{
   publicKey: string;
 }> {
+  if (ONEKEY_SIMULATOR_ENABLED) {
+    if (!currentDeviceId) {
+      throw new Error('OneKey not connected');
+    }
+    return simulatorRequest<{ publicKey: string }>('/public-key', { accountIndex });
+  }
+
   if (!currentConnectId || !currentDeviceId) {
     throw new Error('OneKey not connected');
   }
+
   const path = getBtcDerivationPath(accountIndex);
   const result = await HardwareSDK.btcGetPublicKey(currentConnectId, currentDeviceId, {
     path,
@@ -61,9 +107,20 @@ export async function signWithOneKey(
   messageHex: string,
   accountIndex: number = 0,
 ): Promise<{ v: number; r: string; s: string }> {
+  if (ONEKEY_SIMULATOR_ENABLED) {
+    if (!currentDeviceId) {
+      throw new Error('OneKey not connected');
+    }
+    return simulatorRequest<{ v: number; r: string; s: string }>('/sign-message', {
+      accountIndex,
+      messageHex,
+    });
+  }
+
   if (!currentConnectId || !currentDeviceId) {
     throw new Error('OneKey not connected');
   }
+
   const path = getBtcDerivationPath(accountIndex);
   const result = await HardwareSDK.btcSignMessage(currentConnectId, currentDeviceId, {
     path,

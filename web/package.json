@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:simulator": "VITE_ONEKEY_SIMULATOR=1 VITE_ONEKEY_SIMULATOR_API_BASE=/__onekey_simulator__ VITE_ONEKEY_SIMULATOR_CONTAINER=onekey-emu-1s VITE_ONEKEY_SIMULATOR_REVIEW_URL=http://localhost:6088 vite --host 127.0.0.1 --port 4173",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

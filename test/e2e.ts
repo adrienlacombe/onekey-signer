@@ -19,7 +19,6 @@
 import 'dotenv/config';
 import {
   extractPubKeyCoords,
-  computeStarknetAddress,
   deployViaPaymaster,
   deployAccountDirect,
   isDeployed,
@@ -44,20 +43,43 @@ import {
   ScriptType,
 } from './e2e-helpers.js';
 import {
-  OneKeyBitcoinSigner,
   signBitcoinMessage,
   decodeCompactSignature,
-  pubkeyToPoseidonHash,
-  getUncompressedPubKey,
 } from '../src/signer.js';
+import {
+  ONEKEY_EMULATOR_REVIEW_URL,
+  createConfiguredTestWallet,
+  isOneKeyEmulatorEnabled,
+  type ConfiguredTestWallet,
+} from './onekey-emulator.js';
 
 // ============================================================
-// Test private keys (Hardhat #0 and #1 — DO NOT use with real funds)
+// Default local test private keys — used when ONEKEY_EMULATOR is not enabled
 // ============================================================
-const TEST_PRIVATE_KEY_A =
+const DEFAULT_TEST_PRIVATE_KEY_A =
   'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
-const TEST_PRIVATE_KEY_B =
+const DEFAULT_TEST_PRIVATE_KEY_B =
   '59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+
+let walletA: ConfiguredTestWallet | undefined;
+let walletB: ConfiguredTestWallet | undefined;
+
+function getWallets(): { walletA: ConfiguredTestWallet; walletB: ConfiguredTestWallet } {
+  if (!walletA || !walletB) {
+    walletA = createConfiguredTestWallet({
+      label: 'Wallet A',
+      fallbackPrivateKeyHex: DEFAULT_TEST_PRIVATE_KEY_A,
+      emulatorSlot: 'A',
+    });
+    walletB = createConfiguredTestWallet({
+      label: 'Wallet B',
+      fallbackPrivateKeyHex: DEFAULT_TEST_PRIVATE_KEY_B,
+      emulatorSlot: 'B',
+    });
+  }
+
+  return { walletA, walletB };
+}
 
 // ============================================================
 // Helpers
@@ -80,6 +102,7 @@ function sleep(ms: number) {
 
 async function verifySignerFormat() {
   console.log('\n=== Verify OneKey Signer Format ===\n');
+  const { walletA } = getWallets();
 
   const testHash =
     '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -89,7 +112,7 @@ async function verifySignerFormat() {
     ['P2SH-segwit', ScriptType.P2SH_SEGWIT],
     ['Native segwit', ScriptType.NATIVE_SEGWIT],
   ] as const) {
-    const sig = await signBitcoinMessage(TEST_PRIVATE_KEY_A, testHash, scriptType);
+    const sig = await signBitcoinMessage(walletA.privateKeyHex, testHash, scriptType);
 
     console.log(`  ${name}:`);
     console.log(`    byte0 = ${sig.byte0} (0x${sig.byte0.toString(16)})`);
@@ -127,11 +150,11 @@ async function verifySignerFormat() {
 
 async function deployAccount(
   name: string,
-  privateKey: string,
-  sponsor?: { privateKey: string; address: string; pubkeyHash: string },
+  wallet: ConfiguredTestWallet,
+  sponsor?: ConfiguredTestWallet,
 ) {
   console.log(`\n--- ${name} ---`);
-  const { address, pubkeyHash } = computeStarknetAddress(privateKey);
+  const { address, pubkeyHash } = wallet;
   console.log('  Address:', address);
   console.log('  PubkeyHash:', pubkeyHash);
 
@@ -146,9 +169,10 @@ async function deployAccount(
     if (preFundBalance > 0n) {
       console.log(`  Pre-funded (${formatStrk(preFundBalance)}), deploying directly...`);
       const deployTx = await deployAccountDirect({
-        privateKeyHex: privateKey,
+        privateKeyHex: wallet.privateKeyHex,
         address,
         pubkeyHash,
+        signer: wallet.signer,
       });
       console.log('  Deploy TX:', deployTx);
       const deployStatus = await waitForTx(deployTx);
@@ -160,9 +184,10 @@ async function deployAccount(
       console.log('  Deploying via sponsor...');
       const fundAmount = 2000000000000000000n; // 2 STRK
       const fundTx = await directInvoke({
-        privateKeyHex: sponsor.privateKey,
+        privateKeyHex: sponsor.privateKeyHex,
         starknetAddress: sponsor.address,
         pubkeyHash: sponsor.pubkeyHash,
+        signer: sponsor.signer,
         calls: [
           {
             contractAddress: STRK_TOKEN_ADDRESS,
@@ -174,9 +199,10 @@ async function deployAccount(
       console.log('  Fund TX:', fundTx);
       await waitForTx(fundTx);
       const deployTx = await deployAccountDirect({
-        privateKeyHex: privateKey,
+        privateKeyHex: wallet.privateKeyHex,
         address,
         pubkeyHash,
+        signer: wallet.signer,
       });
       console.log('  Deploy TX:', deployTx);
       const deployStatus = await waitForTx(deployTx);
@@ -196,18 +222,15 @@ async function deployAccount(
 
 async function setup() {
   console.log('\n=== STEP 1: Setup ===\n');
+  const { walletA, walletB } = getWallets();
 
   assert(
     ONEKEY_ACCOUNT_CLASS_HASH !== '0x0000000000000000000000000000000000000000000000000000000000000000',
     'ONEKEY_ACCOUNT_CLASS_HASH not set — declare the contract first',
   );
 
-  const a = await deployAccount('Wallet A', TEST_PRIVATE_KEY_A);
-  const b = await deployAccount('Wallet B', TEST_PRIVATE_KEY_B, {
-    privateKey: TEST_PRIVATE_KEY_A,
-    address: a.address,
-    pubkeyHash: a.pubkeyHash,
-  });
+  const a = await deployAccount('Wallet A', walletA);
+  const b = await deployAccount('Wallet B', walletB, walletA);
 
   if (a.balance === 0n) {
     console.log(
@@ -231,15 +254,16 @@ async function setup() {
 
 async function deposit() {
   console.log('\n=== STEP 2: Privacy Pool Integration ===\n');
+  const { walletA } = getWallets();
 
-  const { address, pubkeyHash } = computeStarknetAddress(TEST_PRIVATE_KEY_A);
+  const { address, pubkeyHash } = walletA;
   console.log('Account:', address);
 
   const balance = await getStrkBalance(address);
   console.log('Balance:', formatStrk(balance));
   assert(balance > 0n, 'Account has no STRK balance — fund it first');
 
-  const privacyKey = derivePrivacyKey(TEST_PRIVATE_KEY_A, address);
+  const privacyKey = derivePrivacyKey(walletA.privateKeyHex, address);
   console.log('Privacy key:', privacyKey);
 
   const provider = getProvider();
@@ -280,9 +304,10 @@ async function deposit() {
     });
     console.log('  Compiled, proving and executing...');
     const vkTx = await proveAndExecute({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: address,
       pubkeyHash,
+      signHash: walletA.signHash,
       clientActions: vkClientActions,
       serverActions: [...vkServerActions],
     });
@@ -326,9 +351,10 @@ async function deposit() {
 
     console.log('  Approving STRK...');
     const approveTxHash = await directInvoke({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: address,
       pubkeyHash,
+      signer: walletA.signer,
       calls: [
         {
           contractAddress: STRK_TOKEN_ADDRESS,
@@ -393,9 +419,10 @@ async function deposit() {
     console.log('  Compiled:', depositServerActions.length, 'server action felts');
 
     const depositTxHash = await proveAndExecute({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: address,
       pubkeyHash,
+      signHash: walletA.signHash,
       clientActions: depositClientActions,
       serverActions: depositServerActions,
     });
@@ -409,9 +436,10 @@ async function deposit() {
 
     console.log('  Approving STRK...');
     const approveTxHash = await directInvoke({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: address,
       pubkeyHash,
+      signer: walletA.signer,
       calls: [
         {
           contractAddress: STRK_TOKEN_ADDRESS,
@@ -452,9 +480,10 @@ async function deposit() {
     console.log('  Compiled:', depositServerActions.length, 'server action felts');
 
     const depositTxHash = await proveAndExecute({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: address,
       pubkeyHash,
+      signHash: walletA.signHash,
       clientActions: depositClientActions,
       serverActions: depositServerActions,
     });
@@ -474,14 +503,15 @@ async function deposit() {
 
 async function transfer() {
   console.log('\n=== STEP 3: Private Transfer A → B ===\n');
+  const { walletA, walletB } = getWallets();
 
   const provider = getProvider();
 
-  const { address: addrA, pubkeyHash: hashA } = computeStarknetAddress(TEST_PRIVATE_KEY_A);
-  const privacyKeyA = derivePrivacyKey(TEST_PRIVATE_KEY_A, addrA);
+  const { address: addrA, pubkeyHash: hashA } = walletA;
+  const privacyKeyA = derivePrivacyKey(walletA.privateKeyHex, addrA);
 
-  const { address: addrB, pubkeyHash: hashB } = computeStarknetAddress(TEST_PRIVATE_KEY_B);
-  const privacyKeyB = derivePrivacyKey(TEST_PRIVATE_KEY_B, addrB);
+  const { address: addrB, pubkeyHash: hashB } = walletB;
+  const privacyKeyB = derivePrivacyKey(walletB.privateKeyHex, addrB);
 
   console.log('Wallet A:', addrA);
   console.log('Wallet B:', addrB);
@@ -492,9 +522,10 @@ async function transfer() {
     console.log('\nFunding Wallet B with gas from Wallet A...');
     const fundAmount = 1000000000000000000n;
     const fundTx = await directInvoke({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: addrA,
       pubkeyHash: hashA,
+      signer: walletA.signer,
       calls: [
         {
           contractAddress: STRK_TOKEN_ADDRESS,
@@ -543,9 +574,10 @@ async function transfer() {
       calldata: vkActions,
     });
     const vkTx = await proveAndExecute({
-      privateKeyHex: TEST_PRIVATE_KEY_B,
+      privateKeyHex: walletB.privateKeyHex,
       starknetAddress: addrB,
       pubkeyHash: hashB,
+      signHash: walletB.signHash,
       clientActions: vkActions,
       serverActions: [...vkServer],
     });
@@ -570,9 +602,10 @@ async function transfer() {
 
   console.log('  Approving STRK...');
   const approveTx = await directInvoke({
-    privateKeyHex: TEST_PRIVATE_KEY_A,
+    privateKeyHex: walletA.privateKeyHex,
     starknetAddress: addrA,
     pubkeyHash: hashA,
+    signer: walletA.signer,
     calls: [
       {
         contractAddress: STRK_TOKEN_ADDRESS,
@@ -616,9 +649,10 @@ async function transfer() {
   });
 
   const txHash = await proveAndExecute({
-    privateKeyHex: TEST_PRIVATE_KEY_A,
+    privateKeyHex: walletA.privateKeyHex,
     starknetAddress: addrA,
     pubkeyHash: hashA,
+    signHash: walletA.signHash,
     clientActions,
     serverActions: [...serverActions],
   });
@@ -635,14 +669,15 @@ async function transfer() {
 
 async function withdraw() {
   console.log('\n=== STEP 4: Withdraw ===\n');
+  const { walletA } = getWallets();
 
-  const { address, pubkeyHash } = computeStarknetAddress(TEST_PRIVATE_KEY_A);
+  const { address, pubkeyHash } = walletA;
   console.log('Account:', address);
 
   const balanceBefore = await getStrkBalance(address);
   console.log('Balance before:', formatStrk(balanceBefore));
 
-  const privacyKey = derivePrivacyKey(TEST_PRIVATE_KEY_A, address);
+  const privacyKey = derivePrivacyKey(walletA.privateKeyHex, address);
   const provider = getProvider();
   const randomFelt = () => {
     const bytes = new Uint8Array(31);
@@ -659,9 +694,10 @@ async function withdraw() {
   console.log(`Withdrawing ${formatStrk(withdrawAmount)} via Deposit+Note+Withdraw batch...`);
   console.log('  Approving STRK...');
   const approveTx = await directInvoke({
-    privateKeyHex: TEST_PRIVATE_KEY_A,
+    privateKeyHex: walletA.privateKeyHex,
     starknetAddress: address,
     pubkeyHash,
+    signer: walletA.signer,
     calls: [{
       contractAddress: STRK_TOKEN_ADDRESS,
       entrypoint: 'approve',
@@ -729,9 +765,10 @@ async function withdraw() {
     // Intermediate: +2X → +X → 0
     const doubleAmount = withdrawAmount * 2n;
     const approveTx2 = await directInvoke({
-      privateKeyHex: TEST_PRIVATE_KEY_A,
+      privateKeyHex: walletA.privateKeyHex,
       starknetAddress: address,
       pubkeyHash,
+      signer: walletA.signer,
       calls: [{
         contractAddress: STRK_TOKEN_ADDRESS,
         entrypoint: 'approve',
@@ -762,9 +799,10 @@ async function withdraw() {
   console.log('  Compiled:', withdrawServerActions.length, 'felts');
 
   const txHash = await proveAndExecute({
-    privateKeyHex: TEST_PRIVATE_KEY_A,
+    privateKeyHex: walletA.privateKeyHex,
     starknetAddress: address,
     pubkeyHash,
+    signHash: walletA.signHash,
     clientActions: withdrawClientActions,
     serverActions: withdrawServerActions,
   });
@@ -796,12 +834,19 @@ async function main() {
     process.exit(1);
   }
 
-  // Always verify the signer format first
-  await verifySignerFormat();
-
   const step = process.argv[2] || 'setup';
 
   try {
+    const { walletA, walletB } = getWallets();
+    console.log(
+      `Signer mode: ${isOneKeyEmulatorEnabled() ? `OneKey emulator bridge (${ONEKEY_EMULATOR_REVIEW_URL})` : 'local private key mock'}`,
+    );
+    console.log(`Wallet A: ${walletA.address}`);
+    console.log(`Wallet B: ${walletB.address}`);
+
+    // Always verify the signer format first
+    await verifySignerFormat();
+
     switch (step) {
       case 'setup':
         await setup();

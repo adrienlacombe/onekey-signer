@@ -84,6 +84,25 @@ function intDAM(dam: unknown): number {
   return 0;
 }
 
+function normalizeSecpPublicKeyHex(publicKeyHex: string): string {
+  const clean = publicKeyHex.replace(/^0x/i, '').toLowerCase();
+  if (!clean || !/^[0-9a-f]+$/.test(clean)) {
+    throw new Error('OneKey returned an invalid secp256k1 public key.');
+  }
+  if (clean.length === 66) {
+    return secp256k1.Point.fromHex(clean).toHex(false);
+  }
+  if (clean.length === 128) {
+    return '04' + clean;
+  }
+  if (clean.length === 130) {
+    return clean;
+  }
+  throw new Error(
+    `Unsupported secp256k1 public key length from OneKey: expected 33-byte or 65-byte key, got ${clean.length / 2} bytes.`,
+  );
+}
+
 // ── Bitcoin message hashing ───────────────────────────────────────
 
 /**
@@ -215,7 +234,7 @@ export function decodeCompactSignature(compact65: Uint8Array): {
  * @param publicKeyHex Uncompressed key (65 bytes hex, with or without 0x prefix)
  */
 export function pubkeyToPoseidonHash(publicKeyHex: string): string {
-  const hex = publicKeyHex.startsWith('0x') ? publicKeyHex.slice(2) : publicKeyHex;
+  const hex = normalizeSecpPublicKeyHex(publicKeyHex);
   // Skip 04 prefix if present
   const start = hex.startsWith('04') ? 2 : 0;
   const xHex = hex.slice(start, start + 64);
@@ -355,7 +374,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
     const [rLow, rHigh] = splitU256(sig.r);
     const [sLow, sHigh] = splitU256(sig.s);
 
-    return [rLow, rHigh, sLow, sHigh, sig.yParity.toString()];
+    return [rLow, rHigh, sLow, sHigh, '0x' + sig.yParity.toString(16)];
   }
 
   /**
@@ -375,7 +394,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
 
     return {
       compact65: sig.compact65,
-      onChain: [rLow, rHigh, sLow, sHigh, sig.yParity.toString()],
+      onChain: [rLow, rHigh, sLow, sHigh, '0x' + sig.yParity.toString(16)],
       byte0: sig.byte0,
       scriptType: this.scriptType,
     };

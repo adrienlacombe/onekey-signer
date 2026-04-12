@@ -12,6 +12,13 @@ export const AVNU_PAYMASTER_URL = import.meta.env.VITE_AVNU_PAYMASTER_URL || '';
 export const AVNU_API_KEY = import.meta.env.VITE_AVNU_API_KEY || '';
 export const PROVING_SERVICE_URL = import.meta.env.VITE_PROVING_SERVICE_URL || '';
 export const DISCOVERY_SERVICE_URL = import.meta.env.VITE_DISCOVERY_SERVICE_URL || '';
+export const ONEKEY_SIMULATOR_ENABLED = /^(1|true|yes|on)$/i.test(
+  import.meta.env.VITE_ONEKEY_SIMULATOR || '',
+);
+export const ONEKEY_SIMULATOR_API_BASE =
+  import.meta.env.VITE_ONEKEY_SIMULATOR_API_BASE || '/__onekey_simulator__';
+export const ONEKEY_SIMULATOR_REVIEW_URL =
+  import.meta.env.VITE_ONEKEY_SIMULATOR_REVIEW_URL || 'http://localhost:6088';
 export const STARKNET_SEPOLIA_EXPLORER = 'https://sepolia.voyager.online';
 
 export function getBtcDerivationPath(accountIndex: number): string {

@@ -4,24 +4,28 @@ import { STARKNET_SEPOLIA_EXPLORER } from '../../config/constants';
 interface HeaderProps {
   connected: boolean;
   address: string;
+  simulatorMode: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
 }
 
-export function Header({ connected, address, onConnect, onDisconnect }: HeaderProps) {
+export function Header({ connected, address, simulatorMode, onConnect, onDisconnect }: HeaderProps) {
   return (
     <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-semibold">SNIP-36 Privacy Pool</h1>
         <span className="text-xs px-2 py-0.5 rounded bg-indigo-900/50 text-indigo-300">Sepolia</span>
         <span className="text-xs px-2 py-0.5 rounded bg-amber-900/50 text-amber-300">OneKey</span>
+        {simulatorMode && (
+          <span className="text-xs px-2 py-0.5 rounded bg-cyan-900/50 text-cyan-300">Simulator</span>
+        )}
       </div>
       <div className="flex items-center gap-3">
         {connected ? (
           <>
             <span className="flex items-center gap-1.5 text-sm text-green-400">
               <span className="w-2 h-2 rounded-full bg-green-400" />
-              OneKey
+              {simulatorMode ? 'OneKey Simulator' : 'OneKey'}
             </span>
             <CopyableHash
               hash={address}
@@ -39,7 +43,7 @@ export function Header({ connected, address, onConnect, onDisconnect }: HeaderPr
             onClick={onConnect}
             className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium"
           >
-            Connect OneKey
+            {simulatorMode ? 'Connect Simulator' : 'Connect OneKey'}
           </button>
         )}
       </div>

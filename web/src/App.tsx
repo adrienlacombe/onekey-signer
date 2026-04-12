@@ -3,7 +3,12 @@ import { FundingPanel } from './components/FundingPanel';
 import { PrivacyActions } from './components/PrivacyActions';
 import { CopyableHash } from './components/shared/CopyableHash';
 import { useOneKey } from './hooks/useOneKey';
-import { STARKNET_SEPOLIA_EXPLORER, ONEKEY_ACCOUNT_CLASS_HASH } from './config/constants';
+import {
+  STARKNET_SEPOLIA_EXPLORER,
+  ONEKEY_ACCOUNT_CLASS_HASH,
+  ONEKEY_SIMULATOR_ENABLED,
+  ONEKEY_SIMULATOR_REVIEW_URL,
+} from './config/constants';
 
 function formatStrk(wei: bigint): string {
   const whole = wei / 10n ** 18n;
@@ -19,6 +24,7 @@ export default function App() {
       <Header
         connected={state.connected}
         address={state.starknetAddress}
+        simulatorMode={ONEKEY_SIMULATOR_ENABLED}
         onConnect={() => connect(0)}
         onDisconnect={disconnect}
       />
@@ -42,16 +48,35 @@ export default function App() {
         {state.phase === 'connect' && !state.loading && (
           <div className="max-w-lg mx-auto mt-24 text-center">
             <div className="text-6xl mb-6">&#x1F511;</div>
-            <h2 className="text-2xl font-semibold mb-3">Connect Your OneKey</h2>
+            <h2 className="text-2xl font-semibold mb-3">
+              {ONEKEY_SIMULATOR_ENABLED ? 'Connect The OneKey Simulator' : 'Connect Your OneKey'}
+            </h2>
             <p className="text-gray-400 mb-8">
-              Plug in your OneKey hardware wallet, unlock it, and open the Bitcoin app.
-              Your secp256k1 key will be used to derive a Starknet account.
+              {ONEKEY_SIMULATOR_ENABLED ? (
+                <>
+                  Start the local OneKey simulator, open the review window at{' '}
+                  <a
+                    className="text-cyan-300 hover:text-cyan-200 underline underline-offset-2"
+                    href={ONEKEY_SIMULATOR_REVIEW_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {ONEKEY_SIMULATOR_REVIEW_URL}
+                  </a>
+                  , and connect the emulator-backed Bitcoin signer.
+                </>
+              ) : (
+                <>
+                  Plug in your OneKey hardware wallet, unlock it, and open the Bitcoin app.
+                  Your secp256k1 key will be used to derive a Starknet account.
+                </>
+              )}
             </p>
             <button
               onClick={() => connect(0)}
               className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl text-lg font-medium"
             >
-              Connect OneKey Bitcoin
+              {ONEKEY_SIMULATOR_ENABLED ? 'Connect OneKey Simulator' : 'Connect OneKey Bitcoin'}
             </button>
             <p className="text-xs text-gray-600 mt-4">
               Class hash: {ONEKEY_ACCOUNT_CLASS_HASH.slice(0, 16)}...

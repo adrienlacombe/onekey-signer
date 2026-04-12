@@ -1,6 +1,11 @@
 import { useState, useCallback } from 'react';
 import { RpcProvider, Account } from 'starknet';
-import { connectOneKey, getBtcPublicKey, disconnectOneKey } from '../lib/onekey';
+import {
+  connectOneKey,
+  getBtcPublicKey,
+  disconnectOneKey,
+  isOneKeySimulatorModeEnabled,
+} from '../lib/onekey';
 import { OneKeyHardwareSigner, pubkeyToPoseidonHash, calculateAccountAddress } from '../lib/signer';
 import {
   ONEKEY_ACCOUNT_CLASS_HASH,
@@ -51,7 +56,13 @@ export function useOneKey() {
   });
 
   const connect = useCallback(async (accountIndex: number = 0) => {
-    setState((s) => ({ ...s, loading: 'Connecting to OneKey...', error: '' }));
+    setState((s) => ({
+      ...s,
+      loading: isOneKeySimulatorModeEnabled()
+        ? 'Connecting to OneKey simulator...'
+        : 'Connecting to OneKey...',
+      error: '',
+    }));
     try {
       await connectOneKey();
       const { publicKey } = await getBtcPublicKey(accountIndex);
