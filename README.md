@@ -193,3 +193,4 @@ Notes about balance and discovery:
 
 - The repository ignores local secrets, generated artifacts, and the external simulator checkout.
 - The E2E flows target Starknet Sepolia and assume the configured deployed contracts and backend services are valid for that network.
+- Generic `is_valid_signature` checks still use 5-felt off-chain signatures, while actual Starknet transaction authorization now uses a domain-separated 6-felt signature with a transaction marker suffix.

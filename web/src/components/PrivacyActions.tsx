@@ -615,7 +615,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       proofFacts: proofFacts.map((fact: string) => BigInt(fact)),
     });
 
-    const onchainSig = await signer.signHash(onchainHash);
+    const onchainSig = await signer.signTransactionHash(onchainHash);
 
     const submitRes = await fetch(STARKNET_RPC_URL, {
       method: 'POST',

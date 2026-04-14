@@ -16,8 +16,11 @@
  *   P2SH-segwit: +4  (byte0 = 35..38)
  *   Native segwit: +8  (byte0 = 39..42)
  *
- * On-chain signature format (5 felt252):
+ * Off-chain signature format (5 felt252):
  *   [r_low, r_high, s_low, s_high, y_parity]
+ *
+ * On-chain transaction signature format (6 felt252):
+ *   [r_low, r_high, s_low, s_high, y_parity, tx_domain_tag]
  */
 import { sha256 } from '@noble/hashes/sha2.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
@@ -44,6 +47,7 @@ const CURVE_ORDER = BigInt(
   '0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
 );
 const HALF_CURVE_ORDER = CURVE_ORDER / 2n;
+export const TX_SIGNATURE_DOMAIN_TAG = '0x4f4e454b45595f54585f415554485f5631';
 
 // ── Bitcoin message prefix (raw bytes) ────────────────────────────
 
@@ -75,6 +79,22 @@ function bytesToHex(bytes: Uint8Array): string {
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
   return ['0x' + (value & mask).toString(16), '0x' + (value >> 128n).toString(16)];
+}
+
+function normalizeHashHex(hashHex: string): `0x${string}` {
+  return ('0x' + hashHex.replace(/^0x/i, '').padStart(64, '0')) as `0x${string}`;
+}
+
+export function getTransactionSignatureHash(txHash: string): string {
+  const domainHash = ec.starkCurve.poseidonHashMany([
+    BigInt(TX_SIGNATURE_DOMAIN_TAG),
+    BigInt(normalizeHashHex(txHash)),
+  ]);
+  return '0x' + domainHash.toString(16);
+}
+
+function withTransactionSignatureMarker(signature: Signature): Signature {
+  return [...(signature as string[]), TX_SIGNATURE_DOMAIN_TAG];
 }
 
 function intDAM(dam: unknown): number {
@@ -328,7 +348,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signHash(msgHash);
+    return this.signTransactionHash(msgHash);
   }
 
   async signDeployAccountTransaction(
@@ -349,7 +369,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signHash(msgHash);
+    return this.signTransactionHash(msgHash);
   }
 
   async signDeclareTransaction(
@@ -359,15 +379,10 @@ export class OneKeyBitcoinSigner implements SignerInterface {
   }
 
   /**
-   * Sign a Starknet tx hash using the OneKey/Trezor Bitcoin legacy format.
-   *
-   * 1. Applies Bitcoin message wrapping (double-SHA256)
-   * 2. Signs with ECDSA on secp256k1
-   * 3. Produces 65-byte compact signature (byte0 encodes script type)
-   * 4. Returns on-chain format: [r_low, r_high, s_low, s_high, y_parity]
+   * Sign an arbitrary 32-byte hash for off-chain verification.
    */
   async signHash(txHash: string): Promise<Signature> {
-    const hashHex = txHash.replace(/^0x/i, '').padStart(64, '0');
+    const hashHex = normalizeHashHex(txHash).slice(2);
 
     const sig = await signBitcoinMessage(this.privateKeyHex, hashHex, this.scriptType);
 
@@ -378,8 +393,17 @@ export class OneKeyBitcoinSigner implements SignerInterface {
   }
 
   /**
+   * Sign a Starknet transaction hash using a dedicated transaction-auth domain.
+   */
+  async signTransactionHash(txHash: string): Promise<Signature> {
+    return withTransactionSignatureMarker(
+      await this.signHash(getTransactionSignatureHash(txHash)),
+    );
+  }
+
+  /**
    * Sign and return BOTH the 65-byte compact (for inspection/logging)
-   * and the on-chain felt252 format.
+   * and the 5-felt off-chain format.
    */
   async signHashFull(txHash: string): Promise<{
     compact65: Uint8Array;

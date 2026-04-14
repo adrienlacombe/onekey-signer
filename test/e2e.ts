@@ -308,6 +308,7 @@ async function deposit() {
       starknetAddress: address,
       pubkeyHash,
       signHash: walletA.signHash,
+      signTransactionHash: walletA.signTransactionHash,
       clientActions: vkClientActions,
       serverActions: [...vkServerActions],
     });
@@ -423,6 +424,7 @@ async function deposit() {
       starknetAddress: address,
       pubkeyHash,
       signHash: walletA.signHash,
+      signTransactionHash: walletA.signTransactionHash,
       clientActions: depositClientActions,
       serverActions: depositServerActions,
     });
@@ -484,6 +486,7 @@ async function deposit() {
       starknetAddress: address,
       pubkeyHash,
       signHash: walletA.signHash,
+      signTransactionHash: walletA.signTransactionHash,
       clientActions: depositClientActions,
       serverActions: depositServerActions,
     });
@@ -578,6 +581,7 @@ async function transfer() {
       starknetAddress: addrB,
       pubkeyHash: hashB,
       signHash: walletB.signHash,
+      signTransactionHash: walletB.signTransactionHash,
       clientActions: vkActions,
       serverActions: [...vkServer],
     });
@@ -653,6 +657,7 @@ async function transfer() {
     starknetAddress: addrA,
     pubkeyHash: hashA,
     signHash: walletA.signHash,
+    signTransactionHash: walletA.signTransactionHash,
     clientActions,
     serverActions: [...serverActions],
   });
@@ -803,6 +808,7 @@ async function withdraw() {
     starknetAddress: address,
     pubkeyHash,
     signHash: walletA.signHash,
+    signTransactionHash: walletA.signTransactionHash,
     clientActions: withdrawClientActions,
     serverActions: withdrawServerActions,
   });

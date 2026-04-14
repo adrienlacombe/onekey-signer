@@ -20,7 +20,9 @@ import {
   pubkeyToPoseidonHash,
   getUncompressedPubKey,
   calculateAccountAddress,
+  getTransactionSignatureHash,
   signBitcoinMessage,
+  TX_SIGNATURE_DOMAIN_TAG,
 } from '../src/signer.js';
 import {
   ONEKEY_ACCOUNT_CLASS_HASH,
@@ -271,6 +273,22 @@ async function signMessageHash(params: {
   return signStarknetHash(params.privateKeyHex, params.messageHash, params.scriptType);
 }
 
+async function signTransactionHash(params: {
+  messageHash: string;
+  privateKeyHex: string;
+  scriptType?: ScriptType;
+  signHash?: SignHashFn;
+}): Promise<string[]> {
+  if (params.signHash) {
+    return params.signHash(params.messageHash);
+  }
+  return signStarknetTransactionHash(
+    params.privateKeyHex,
+    params.messageHash,
+    params.scriptType,
+  );
+}
+
 export async function deployAccountDirect(params: {
   privateKeyHex: string;
   address: string;
@@ -316,7 +334,7 @@ export async function deployAccountDirect(params: {
 // ============================================================
 
 /**
- * Sign a Starknet typed data hash with the OneKey Bitcoin format.
+ * Sign an arbitrary off-chain hash with the OneKey Bitcoin format.
  * Returns 5-felt signature: [r_low, r_high, s_low, s_high, y_parity]
  */
 export async function signStarknetHash(
@@ -338,6 +356,25 @@ export async function signStarknetHash(
   const sHigh = '0x' + (sig.s >> 128n).toString(16);
 
   return [rLow, rHigh, sLow, sHigh, '0x' + sig.yParity.toString(16)];
+}
+
+/**
+ * Sign a Starknet transaction hash with the dedicated transaction-auth domain.
+ * Returns 6 felts: [r_low, r_high, s_low, s_high, y_parity, tx_domain_tag]
+ */
+export async function signStarknetTransactionHash(
+  privateKeyHex: string,
+  txHash: string,
+  scriptType: ScriptType = ScriptType.NATIVE_SEGWIT,
+): Promise<string[]> {
+  return [
+    ...(await signStarknetHash(
+      privateKeyHex,
+      getTransactionSignatureHash(txHash),
+      scriptType,
+    )),
+    TX_SIGNATURE_DOMAIN_TAG,
+  ];
 }
 
 /**
@@ -446,6 +483,7 @@ export async function proveAndExecute(params: {
   serverActions: string[];
   scriptType?: ScriptType;
   signHash?: SignHashFn;
+  signTransactionHash?: SignHashFn;
 }): Promise<string> {
   if (!PROVING_SERVICE_URL) throw new Error('PROVING_SERVICE_URL not set');
 
@@ -603,11 +641,11 @@ export async function proveAndExecute(params: {
   console.log('  On-chain TX hash:', onchainTxHash);
 
   // Sign the on-chain hash
-  const onchainSig = await signMessageHash({
+  const onchainSig = await signTransactionHash({
     privateKeyHex: params.privateKeyHex,
     messageHash: onchainTxHash,
     scriptType: params.scriptType,
-    signHash: params.signHash,
+    signHash: params.signTransactionHash,
   });
 
   // Submit via raw RPC with proof_facts + proof
