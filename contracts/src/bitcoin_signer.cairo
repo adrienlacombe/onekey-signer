@@ -6,10 +6,18 @@ use starknet::secp256_trait::{
 use starknet::secp256k1::Secp256k1Point;
 
 /// Half the secp256k1 curve order — signatures with s > HALF are malleable.
-pub const SECP_256_K1_HALF: u256 =
-    0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141 / 2;
+pub const SECP_256_K1_HALF: u256 = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141 / 2;
 
-/// Validates a Bitcoin-style secp256k1 signature against a Starknet tx hash.
+/// Domain tag appended to Starknet transaction signatures and mixed into the signed hash.
+pub const TX_SIGNATURE_DOMAIN_TAG: felt252 = 0x4f4e454b45595f54585f415554485f5631; // "ONEKEY_TX_AUTH_V1"
+
+/// Domain-separate on-chain transaction authorization from generic off-chain signatures.
+#[must_use]
+pub fn get_transaction_signature_hash(tx_hash: felt252) -> felt252 {
+    poseidon_hash_span(array![TX_SIGNATURE_DOMAIN_TAG, tx_hash].span())
+}
+
+/// Validates a Bitcoin-style secp256k1 signature against an application-specific 32-byte hash.
 ///
 /// Compliant with the OneKey / Trezor legacy signing format:
 ///   digest = SHA256(SHA256(varint(24) || "Bitcoin Signed Message:\n" || varint(32) || hash))
@@ -20,9 +28,7 @@ pub const SECP_256_K1_HALF: u256 =
 /// Signature is deserialized from a felt252 span:
 ///   [r_low, r_high, s_low, s_high, y_parity]
 #[must_use]
-pub fn is_valid_bitcoin_signature(
-    hash: felt252, pubkey_hash: felt252, signature: Secp256Signature,
-) -> bool {
+pub fn is_valid_bitcoin_signature(hash: felt252, pubkey_hash: felt252, signature: Secp256Signature) -> bool {
     // Validate r and s are valid secp256k1 scalars
     assert(is_signature_entry_valid::<Secp256k1Point>(signature.r), 'invalid-r-value');
     assert(is_signature_entry_valid::<Secp256k1Point>(signature.s), 'invalid-s-value');
@@ -92,9 +98,7 @@ pub fn is_valid_bitcoin_signature(
     // Compute Poseidon hash of (x_low, x_high, y_low, y_high)
     let point = recovered.unwrap();
     let (x, y) = point.get_coordinates().unwrap();
-    let recovered_hash = poseidon_hash_span(
-        array![x.low.into(), x.high.into(), y.low.into(), y.high.into()].span(),
-    );
+    let recovered_hash = poseidon_hash_span(array![x.low.into(), x.high.into(), y.low.into(), y.high.into()].span());
     recovered_hash == pubkey_hash
 }
 
@@ -151,21 +155,53 @@ fn eight_words_to_u256(words: [u32; 8]) -> u256 {
 
 /// Returns 2^n for bit shifts on u128 values (multiples of 8 only).
 fn pow2_128(n: u32) -> u128 {
-    if n == 0 { return 1; }
-    if n == 8 { return 0x100; }
-    if n == 16 { return 0x10000; }
-    if n == 24 { return 0x1000000; }
-    if n == 32 { return 0x100000000; }
-    if n == 40 { return 0x10000000000; }
-    if n == 48 { return 0x1000000000000; }
-    if n == 56 { return 0x100000000000000; }
-    if n == 64 { return 0x10000000000000000; }
-    if n == 72 { return 0x1000000000000000000; }
-    if n == 80 { return 0x100000000000000000000; }
-    if n == 88 { return 0x10000000000000000000000; }
-    if n == 96 { return 0x1000000000000000000000000; }
-    if n == 104 { return 0x100000000000000000000000000; }
-    if n == 112 { return 0x10000000000000000000000000000; }
-    if n == 120 { return 0x1000000000000000000000000000000; }
+    if n == 0 {
+        return 1;
+    }
+    if n == 8 {
+        return 0x100;
+    }
+    if n == 16 {
+        return 0x10000;
+    }
+    if n == 24 {
+        return 0x1000000;
+    }
+    if n == 32 {
+        return 0x100000000;
+    }
+    if n == 40 {
+        return 0x10000000000;
+    }
+    if n == 48 {
+        return 0x1000000000000;
+    }
+    if n == 56 {
+        return 0x100000000000000;
+    }
+    if n == 64 {
+        return 0x10000000000000000;
+    }
+    if n == 72 {
+        return 0x1000000000000000000;
+    }
+    if n == 80 {
+        return 0x100000000000000000000;
+    }
+    if n == 88 {
+        return 0x10000000000000000000000;
+    }
+    if n == 96 {
+        return 0x1000000000000000000000000;
+    }
+    if n == 104 {
+        return 0x100000000000000000000000000;
+    }
+    if n == 112 {
+        return 0x10000000000000000000000000000;
+    }
+    if n == 120 {
+        return 0x1000000000000000000000000000000;
+    }
     panic!("pow2_128: unsupported shift")
 }

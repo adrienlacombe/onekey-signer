@@ -7,7 +7,7 @@ type HexString = `0x${string}`;
 // ── Account contract ──────────────────────────────────────────────
 // Replace after running `scarb build` + `sncast declare`
 export const ONEKEY_ACCOUNT_CLASS_HASH: HexString =
-  '0x5a5e3ec145d13e91e863fee8fcc453fd7c78be2393b1f7b7d4736650e7f1884';
+  '0x001a06f5ac34a37afd6d68e574aa2e4e4d31ae1ac8d85dfa06c46e2aafe204f4';
 
 // ── Privacy pool (Sepolia) ────────────────────────────────────────
 export const PRIVACY_POOL_ADDRESS: HexString =

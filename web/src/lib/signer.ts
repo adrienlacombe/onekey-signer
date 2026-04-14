@@ -2,7 +2,8 @@
  * OneKey Bitcoin signer for Starknet — uses the actual OneKey hardware wallet.
  * Implements starknet.js SignerInterface for use with Account.
  *
- * On-chain signature format: [r_low, r_high, s_low, s_high, y_parity]
+ * Off-chain signature format: [r_low, r_high, s_low, s_high, y_parity]
+ * On-chain tx signature format: [r_low, r_high, s_low, s_high, y_parity, tx_domain_tag]
  */
 import {
   type SignerInterface,
@@ -23,10 +24,27 @@ import { signWithOneKey } from './onekey';
 
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
 const HALF_CURVE_ORDER = CURVE_ORDER / 2n;
+export const TX_SIGNATURE_DOMAIN_TAG = '0x4f4e454b45595f54585f415554485f5631';
 
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
   return ['0x' + (value & mask).toString(16), '0x' + (value >> 128n).toString(16)];
+}
+
+function normalizeHashHex(hashHex: string): `0x${string}` {
+  return ('0x' + hashHex.replace(/^0x/i, '').padStart(64, '0')) as `0x${string}`;
+}
+
+export function getTransactionSignatureHash(txHash: string): string {
+  const domainHash = ec.starkCurve.poseidonHashMany([
+    BigInt(TX_SIGNATURE_DOMAIN_TAG),
+    BigInt(normalizeHashHex(txHash)),
+  ]);
+  return '0x' + domainHash.toString(16);
+}
+
+function withTransactionSignatureMarker(signature: Signature): Signature {
+  return [...(signature as string[]), TX_SIGNATURE_DOMAIN_TAG];
 }
 
 function intDAM(dam: unknown): number {
@@ -122,7 +140,7 @@ export class OneKeyHardwareSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signHash(msgHash);
+    return this.signTransactionHash(msgHash);
   }
 
   async signDeployAccountTransaction(details: DeployAccountSignerDetails): Promise<Signature> {
@@ -139,7 +157,7 @@ export class OneKeyHardwareSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signHash(msgHash);
+    return this.signTransactionHash(msgHash);
   }
 
   async signDeclareTransaction(_details: DeclareSignerDetails): Promise<Signature> {
@@ -147,13 +165,10 @@ export class OneKeyHardwareSigner implements SignerInterface {
   }
 
   /**
-   * Sign a tx hash via OneKey hardware Bitcoin app.
-   * The device applies the Bitcoin message wrapping internally:
-   *   SHA256(SHA256("\x18Bitcoin Signed Message:\n" + varint(32) + hash))
-   * Returns on-chain format: [r_low, r_high, s_low, s_high, y_parity]
+   * Sign an arbitrary 32-byte hash via the OneKey Bitcoin app for off-chain verification.
    */
   async signHash(txHash: string): Promise<Signature> {
-    const messageHex = txHash.replace(/^0x/i, '').padStart(64, '0');
+    const messageHex = normalizeHashHex(txHash).slice(2);
     const rawSig = await signWithOneKey(messageHex, this.accountIndex);
 
     let r = BigInt('0x' + normalizeScalarHex(rawSig.r, 'r'));
@@ -170,5 +185,11 @@ export class OneKeyHardwareSigner implements SignerInterface {
     const [sLow, sHigh] = splitU256(s);
 
     return [rLow, rHigh, sLow, sHigh, '0x' + v.toString(16)];
+  }
+
+  async signTransactionHash(txHash: string): Promise<Signature> {
+    return withTransactionSignatureMarker(
+      await this.signHash(getTransactionSignatureHash(txHash)),
+    );
   }
 }

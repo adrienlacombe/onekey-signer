@@ -6,8 +6,11 @@
 ///   - Poseidon hash of secp256k1 public key coords (virtual OS compatible)
 ///   - Bitcoin message wrapping for signature verification
 ///
-/// On-chain signature format (5 felt252):
+/// Off-chain signature format (5 felt252):
 ///   [r_low, r_high, s_low, s_high, y_parity]
+///
+/// On-chain transaction signature format (6 felt252):
+///   [r_low, r_high, s_low, s_high, y_parity, tx_domain_tag]
 
 use starknet::account::Call;
 
@@ -26,12 +29,14 @@ pub trait IOnekeyAccount<TState> {
 
 #[starknet::contract(account)]
 pub mod OnekeyBitcoinAccount {
+    use core::num::traits::Zero;
+    use onekey_account::bitcoin_signer::{
+        TX_SIGNATURE_DOMAIN_TAG, get_transaction_signature_hash, is_valid_bitcoin_signature,
+    };
     use starknet::account::Call;
     use starknet::secp256_trait::Signature as Secp256Signature;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
     use starknet::{SyscallResultTrait, get_caller_address, get_tx_info};
-    use core::num::traits::Zero;
-    use onekey_account::bitcoin_signer::is_valid_bitcoin_signature;
 
     // ISRC6 interface ID
     const ISRC6_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
@@ -67,7 +72,8 @@ pub mod OnekeyBitcoinAccount {
         self.emit(OwnerAdded { pubkey_hash });
     }
 
-    // ── IAccount (SRC6-compatible) ──────────────────────────────────
+    // ── IAccount (SRC6-compatible)
+    // ──────────────────────────────────
 
     #[abi(embed_v0)]
     impl AccountImpl of super::IAccount<ContractState> {
@@ -76,12 +82,10 @@ pub mod OnekeyBitcoinAccount {
             self._assert_supported_tx_version();
             let mut results: Array<Span<felt252>> = array![];
             for call in calls.span() {
-                let res = starknet::syscalls::call_contract_syscall(
-                    *call.to, *call.selector, *call.calldata,
-                )
+                let res = starknet::syscalls::call_contract_syscall(*call.to, *call.selector, *call.calldata)
                     .unwrap_syscall();
                 results.append(res);
-            };
+            }
             results
         }
 
@@ -89,9 +93,7 @@ pub mod OnekeyBitcoinAccount {
             self._validate_tx()
         }
 
-        fn is_valid_signature(
-            self: @ContractState, hash: felt252, signature: Array<felt252>,
-        ) -> felt252 {
+        fn is_valid_signature(self: @ContractState, hash: felt252, signature: Array<felt252>) -> felt252 {
             if self._is_valid_signature(hash, signature.span()) {
                 starknet::VALIDATED
             } else {
@@ -100,19 +102,18 @@ pub mod OnekeyBitcoinAccount {
         }
     }
 
-    // ── Deploy validation ────────────────────────────────────────────
+    // ── Deploy validation
+    // ────────────────────────────────────────────
 
     #[external(v0)]
     fn __validate_deploy__(
-        self: @ContractState,
-        class_hash: felt252,
-        contract_address_salt: felt252,
-        pubkey_hash: felt252,
+        self: @ContractState, class_hash: felt252, contract_address_salt: felt252, pubkey_hash: felt252,
     ) -> felt252 {
         self._validate_tx()
     }
 
-    // ── Public key getter + SRC5 ─────────────────────────────────────
+    // ── Public key getter + SRC5
+    // ─────────────────────────────────────
 
     #[abi(embed_v0)]
     impl OnekeyAccountImpl of super::IOnekeyAccount<ContractState> {
@@ -125,7 +126,8 @@ pub mod OnekeyBitcoinAccount {
         }
     }
 
-    // ── Internals ────────────────────────────────────────────────────
+    // ── Internals
+    // ────────────────────────────────────────────────────
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
@@ -140,47 +142,75 @@ pub mod OnekeyBitcoinAccount {
             self._assert_supported_tx_version();
             let tx_info = get_tx_info().unbox();
             assert(
-                self._is_valid_signature(tx_info.transaction_hash, tx_info.signature),
+                self._is_valid_transaction_signature(tx_info.transaction_hash, tx_info.signature),
                 Errors::INVALID_SIGNATURE,
             );
             starknet::VALIDATED
         }
 
-        /// Parse a felt252 span into a Secp256Signature and verify.
-        fn _is_valid_signature(
-            self: @ContractState, hash: felt252, signature: Span<felt252>,
-        ) -> bool {
-            if signature.len() != 5 {
+        /// Parse a 5-felt signature and verify an off-chain hash directly.
+        fn _is_valid_signature(self: @ContractState, hash: felt252, signature: Span<felt252>) -> bool {
+            let sig = match self._parse_signature(signature, false) {
+                Option::Some(sig) => sig,
+                Option::None => { return false; },
+            };
+            is_valid_bitcoin_signature(hash, self.pubkey_hash.read(), sig)
+        }
+
+        /// Parse a 6-felt transaction signature and verify the domain-separated tx hash.
+        fn _is_valid_transaction_signature(self: @ContractState, tx_hash: felt252, signature: Span<felt252>) -> bool {
+            if signature.len() != 6 {
                 return false;
+            }
+            if *signature[5] != TX_SIGNATURE_DOMAIN_TAG {
+                return false;
+            }
+            let sig = match self._parse_signature(signature, true) {
+                Option::Some(sig) => sig,
+                Option::None => { return false; },
+            };
+            is_valid_bitcoin_signature(get_transaction_signature_hash(tx_hash), self.pubkey_hash.read(), sig)
+        }
+
+        /// Parse a felt252 span into a Secp256Signature, optionally allowing a tx marker suffix.
+        fn _parse_signature(
+            self: @ContractState, signature: Span<felt252>, allow_tx_suffix: bool,
+        ) -> Option<Secp256Signature> {
+            let expected_len = if allow_tx_suffix {
+                6
+            } else {
+                5
+            };
+            if signature.len() != expected_len {
+                return Option::None;
             }
             let r_low: u128 = match (*signature[0]).try_into() {
                 Option::Some(v) => v,
-                Option::None => { return false; },
+                Option::None => { return Option::None; },
             };
             let r_high: u128 = match (*signature[1]).try_into() {
                 Option::Some(v) => v,
-                Option::None => { return false; },
+                Option::None => { return Option::None; },
             };
             let s_low: u128 = match (*signature[2]).try_into() {
                 Option::Some(v) => v,
-                Option::None => { return false; },
+                Option::None => { return Option::None; },
             };
             let s_high: u128 = match (*signature[3]).try_into() {
                 Option::Some(v) => v,
-                Option::None => { return false; },
+                Option::None => { return Option::None; },
             };
             let y_parity_felt = *signature[4];
             if y_parity_felt != 0 && y_parity_felt != 1 {
-                return false;
+                return Option::None;
             }
             let y_parity: bool = y_parity_felt == 1;
 
-            let sig = Secp256Signature {
-                r: u256 { low: r_low, high: r_high },
-                s: u256 { low: s_low, high: s_high },
-                y_parity,
-            };
-            is_valid_bitcoin_signature(hash, self.pubkey_hash.read(), sig)
+            Option::Some(
+                Secp256Signature {
+                    r: u256 { low: r_low, high: r_high }, s: u256 { low: s_low, high: s_high }, y_parity,
+                },
+            )
         }
     }
 }
