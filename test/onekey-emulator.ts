@@ -21,6 +21,7 @@ import { ONEKEY_ACCOUNT_CLASS_HASH } from '../src/constants.js';
 import {
   OneKeyBitcoinSigner,
   calculateAccountAddress,
+  getOffchainSignatureHash,
   getTransactionSignatureHash,
   getUncompressedPubKey,
   pubkeyToPoseidonHash,
@@ -84,6 +85,10 @@ function bytesToHex(bytes: Uint8Array): string {
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
   return ['0x' + (value & mask).toString(16), '0x' + (value >> 128n).toString(16)];
+}
+
+function normalizeHashHex(hashHex: string): `0x${string}` {
+  return ('0x' + hashHex.replace(/^0x/i, '').padStart(64, '0')) as `0x${string}`;
 }
 
 function intDAM(dam: unknown): number {
@@ -513,25 +518,42 @@ class OneKeyEmulatorSigner implements SignerInterface {
     return this.signTransactionHash(msgHash);
   }
 
-  async signDeclareTransaction(_details: DeclareSignerDetails): Promise<Signature> {
-    throw new Error('signDeclareTransaction not supported');
+  async signDeclareTransaction(details: DeclareSignerDetails): Promise<Signature> {
+    const det = details as Record<string, unknown>;
+    const msgHash = hash.calculateDeclareTransactionHash({
+      ...det,
+      classHash: det.classHash,
+      compiledClassHash: det.compiledClassHash,
+      senderAddress: det.senderAddress,
+      version: det.version,
+      paymasterData: det.paymasterData || [],
+      accountDeploymentData: det.accountDeploymentData || [],
+      nonceDataAvailabilityMode: intDAM(det.nonceDataAvailabilityMode),
+      feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
+      tip: det.tip ?? 0,
+    } as any);
+    return this.signTransactionHash(msgHash);
   }
 
-  async signHash(txHash: string): Promise<Signature> {
-    const messageHex = txHash.replace(/^0x/i, '').padStart(64, '0');
+  async signHash(messageHash: string): Promise<Signature> {
+    return this.signRawHash(getOffchainSignatureHash(messageHash));
+  }
+
+  async signTransactionHash(txHash: string): Promise<Signature> {
+    return [
+      ...((await this.signRawHash(getTransactionSignatureHash(txHash))) as string[]),
+      TX_SIGNATURE_DOMAIN_TAG,
+    ];
+  }
+
+  private async signRawHash(hashHex: string): Promise<Signature> {
+    const messageHex = normalizeHashHex(hashHex).slice(2);
     const rawSig = await signWithOneKeyEmulator(
       messageHex,
       this.accountIndex,
       this.expectedCompressedPubKeyHex,
     );
     return toOnChainSignature(rawSig);
-  }
-
-  async signTransactionHash(txHash: string): Promise<Signature> {
-    return [
-      ...((await this.signHash(getTransactionSignatureHash(txHash))) as string[]),
-      TX_SIGNATURE_DOMAIN_TAG,
-    ];
   }
 }
 
