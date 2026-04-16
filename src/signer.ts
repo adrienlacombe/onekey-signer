@@ -401,10 +401,11 @@ export class OneKeyBitcoinSigner implements SignerInterface {
   }
 
   /**
-   * Sign an arbitrary 32-byte hash for off-chain verification.
+   * Sign an arbitrary 32-byte off-chain hash under the OFFCHAIN domain.
+   * Verifiers must apply the same domain hash before calling `is_valid_signature`.
    */
-  async signHash(messageHash: string): Promise<Signature> {
-    return this.signRawHash(getOffchainSignatureHash(messageHash));
+  async signHash(offchainHash: string): Promise<Signature> {
+    return this.signRawHash(getOffchainSignatureHash(offchainHash));
   }
 
   async signTransactionHash(txHash: string): Promise<Signature> {
@@ -427,17 +428,18 @@ export class OneKeyBitcoinSigner implements SignerInterface {
 
   /**
    * Sign and return BOTH the 65-byte compact (for inspection/logging)
-   * and the off-chain felt252 format.
+   * and the 5-felt off-chain signature format used by `is_valid_signature`.
    */
-  async signHashFull(messageHash: string): Promise<{
+  async signHashFull(offchainHash: string): Promise<{
     compact65: Uint8Array;
+    // Historical name kept for compatibility; this is the 5-felt OFFCHAIN signature.
     onChain: string[];
     byte0: number;
     scriptType: ScriptType;
   }> {
     const sig = await signBitcoinMessage(
       this.privateKeyHex,
-      normalizeHashHex(getOffchainSignatureHash(messageHash)).slice(2),
+      normalizeHashHex(getOffchainSignatureHash(offchainHash)).slice(2),
       this.scriptType,
     );
     const [rLow, rHigh] = splitU256(sig.r);

@@ -259,7 +259,7 @@ export async function executeInvokeTx(params: {
 // ============================================================
 
 export type SignHashFn = (messageHash: string) => Promise<string[]>;
-export type SignTransactionHashFn = (messageHash: string) => Promise<string[]>;
+export type SignTransactionHashFn = (txHash: string) => Promise<string[]>;
 
 async function signMessageHash(params: {
   messageHash: string;
@@ -274,17 +274,17 @@ async function signMessageHash(params: {
 }
 
 async function signTransactionHash(params: {
-  messageHash: string;
+  txHash: string;
   privateKeyHex: string;
   scriptType?: ScriptType;
   signTransactionHash?: SignTransactionHashFn;
 }): Promise<string[]> {
   if (params.signTransactionHash) {
-    return params.signTransactionHash(params.messageHash);
+    return params.signTransactionHash(params.txHash);
   }
   return signStarknetTransactionHash(
     params.privateKeyHex,
-    params.messageHash,
+    params.txHash,
     params.scriptType,
   );
 }
@@ -334,7 +334,7 @@ export async function deployAccountDirect(params: {
 // ============================================================
 
 /**
- * Sign an arbitrary off-chain hash with the OneKey Bitcoin format.
+ * Sign an arbitrary off-chain hash under the OFFCHAIN domain.
  * Returns 5-felt signature: [r_low, r_high, s_low, s_high, y_parity]
  */
 export async function signStarknetHash(
@@ -633,7 +633,7 @@ export async function proveAndExecute(params: {
 
   const txSignature = await signTransactionHash({
     privateKeyHex: params.privateKeyHex,
-    messageHash: onchainTxHash,
+    txHash: onchainTxHash,
     scriptType: params.scriptType,
     signTransactionHash: params.signTransactionHash,
   });

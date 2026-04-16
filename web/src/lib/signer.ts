@@ -187,10 +187,11 @@ export class OneKeyHardwareSigner implements SignerInterface {
   }
 
   /**
-   * Sign an arbitrary 32-byte hash via the OneKey Bitcoin app for off-chain verification.
+   * Sign an arbitrary 32-byte off-chain hash under the OFFCHAIN domain.
+   * Verifiers must apply the same domain hash before calling `is_valid_signature`.
    */
-  async signHash(messageHash: string): Promise<Signature> {
-    return this.signRawHash(getOffchainSignatureHash(messageHash));
+  async signHash(offchainHash: string): Promise<Signature> {
+    return this.signRawHash(getOffchainSignatureHash(offchainHash));
   }
 
   async signTransactionHash(txHash: string): Promise<Signature> {
