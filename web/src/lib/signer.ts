@@ -25,6 +25,7 @@ import { signWithOneKey } from './onekey';
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
 const HALF_CURVE_ORDER = CURVE_ORDER / 2n;
 export const TX_SIGNATURE_DOMAIN_TAG = '0x4f4e454b45595f54585f415554485f5631';
+export const OFFCHAIN_SIGNATURE_DOMAIN_TAG = '0x4f4e454b45595f4f4646434841494e5f5631';
 
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
@@ -39,6 +40,14 @@ export function getTransactionSignatureHash(txHash: string): string {
   const domainHash = ec.starkCurve.poseidonHashMany([
     BigInt(TX_SIGNATURE_DOMAIN_TAG),
     BigInt(normalizeHashHex(txHash)),
+  ]);
+  return '0x' + domainHash.toString(16);
+}
+
+export function getOffchainSignatureHash(messageHash: string): string {
+  const domainHash = ec.starkCurve.poseidonHashMany([
+    BigInt(OFFCHAIN_SIGNATURE_DOMAIN_TAG),
+    BigInt(normalizeHashHex(messageHash)),
   ]);
   return '0x' + domainHash.toString(16);
 }
@@ -160,15 +169,38 @@ export class OneKeyHardwareSigner implements SignerInterface {
     return this.signTransactionHash(msgHash);
   }
 
-  async signDeclareTransaction(_details: DeclareSignerDetails): Promise<Signature> {
-    throw new Error('signDeclareTransaction not supported');
+  async signDeclareTransaction(details: DeclareSignerDetails): Promise<Signature> {
+    const det = details as Record<string, unknown>;
+    const msgHash = hash.calculateDeclareTransactionHash({
+      ...det,
+      classHash: det.classHash,
+      compiledClassHash: det.compiledClassHash,
+      senderAddress: det.senderAddress,
+      version: det.version,
+      paymasterData: det.paymasterData || [],
+      accountDeploymentData: det.accountDeploymentData || [],
+      nonceDataAvailabilityMode: intDAM(det.nonceDataAvailabilityMode),
+      feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
+      tip: det.tip ?? 0,
+    } as any);
+    return this.signTransactionHash(msgHash);
   }
 
   /**
    * Sign an arbitrary 32-byte hash via the OneKey Bitcoin app for off-chain verification.
    */
-  async signHash(txHash: string): Promise<Signature> {
-    const messageHex = normalizeHashHex(txHash).slice(2);
+  async signHash(messageHash: string): Promise<Signature> {
+    return this.signRawHash(getOffchainSignatureHash(messageHash));
+  }
+
+  async signTransactionHash(txHash: string): Promise<Signature> {
+    return withTransactionSignatureMarker(
+      await this.signRawHash(getTransactionSignatureHash(txHash)),
+    );
+  }
+
+  private async signRawHash(hashHex: string): Promise<Signature> {
+    const messageHex = normalizeHashHex(hashHex).slice(2);
     const rawSig = await signWithOneKey(messageHex, this.accountIndex);
 
     let r = BigInt('0x' + normalizeScalarHex(rawSig.r, 'r'));
@@ -185,11 +217,5 @@ export class OneKeyHardwareSigner implements SignerInterface {
     const [sLow, sHigh] = splitU256(s);
 
     return [rLow, rHigh, sLow, sHigh, '0x' + v.toString(16)];
-  }
-
-  async signTransactionHash(txHash: string): Promise<Signature> {
-    return withTransactionSignatureMarker(
-      await this.signHash(getTransactionSignatureHash(txHash)),
-    );
   }
 }

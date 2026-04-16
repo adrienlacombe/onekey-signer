@@ -31,7 +31,8 @@ pub trait IOnekeyAccount<TState> {
 pub mod OnekeyBitcoinAccount {
     use core::num::traits::Zero;
     use onekey_account::bitcoin_signer::{
-        TX_SIGNATURE_DOMAIN_TAG, get_transaction_signature_hash, is_valid_bitcoin_signature,
+        TX_SIGNATURE_DOMAIN_TAG, get_offchain_signature_hash, get_transaction_signature_hash,
+        is_valid_bitcoin_signature,
     };
     use starknet::account::Call;
     use starknet::secp256_trait::Signature as Secp256Signature;
@@ -94,7 +95,7 @@ pub mod OnekeyBitcoinAccount {
         }
 
         fn is_valid_signature(self: @ContractState, hash: felt252, signature: Array<felt252>) -> felt252 {
-            if self._is_valid_signature(hash, signature.span()) {
+            if self._is_valid_offchain_signature(hash, signature.span()) {
                 starknet::VALIDATED
             } else {
                 0
@@ -109,6 +110,11 @@ pub mod OnekeyBitcoinAccount {
     fn __validate_deploy__(
         self: @ContractState, class_hash: felt252, contract_address_salt: felt252, pubkey_hash: felt252,
     ) -> felt252 {
+        self._validate_tx()
+    }
+
+    #[external(v0)]
+    fn __validate_declare__(self: @ContractState, class_hash: felt252) -> felt252 {
         self._validate_tx()
     }
 
@@ -148,16 +154,16 @@ pub mod OnekeyBitcoinAccount {
             starknet::VALIDATED
         }
 
-        /// Parse a 5-felt signature and verify an off-chain hash directly.
-        fn _is_valid_signature(self: @ContractState, hash: felt252, signature: Span<felt252>) -> bool {
+        /// Parse a 5-felt signature and verify an off-chain hash under the off-chain domain.
+        fn _is_valid_offchain_signature(self: @ContractState, hash: felt252, signature: Span<felt252>) -> bool {
             let sig = match self._parse_signature(signature, false) {
                 Option::Some(sig) => sig,
                 Option::None => { return false; },
             };
-            is_valid_bitcoin_signature(hash, self.pubkey_hash.read(), sig)
+            is_valid_bitcoin_signature(get_offchain_signature_hash(hash), self.pubkey_hash.read(), sig)
         }
 
-        /// Parse a 6-felt transaction signature and verify the domain-separated tx hash.
+        /// Parse a 6-felt transaction signature and verify the transaction-auth domain hash.
         fn _is_valid_transaction_signature(self: @ContractState, tx_hash: felt252, signature: Span<felt252>) -> bool {
             if signature.len() != 6 {
                 return false;
@@ -172,7 +178,6 @@ pub mod OnekeyBitcoinAccount {
             is_valid_bitcoin_signature(get_transaction_signature_hash(tx_hash), self.pubkey_hash.read(), sig)
         }
 
-        /// Parse a felt252 span into a Secp256Signature, optionally allowing a tx marker suffix.
         fn _parse_signature(
             self: @ContractState, signature: Span<felt252>, allow_tx_suffix: bool,
         ) -> Option<Secp256Signature> {

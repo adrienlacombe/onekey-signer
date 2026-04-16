@@ -20,9 +20,8 @@ import {
   pubkeyToPoseidonHash,
   getUncompressedPubKey,
   calculateAccountAddress,
-  getTransactionSignatureHash,
+  getOffchainSignatureHash,
   signBitcoinMessage,
-  TX_SIGNATURE_DOMAIN_TAG,
 } from '../src/signer.js';
 import {
   ONEKEY_ACCOUNT_CLASS_HASH,
@@ -260,6 +259,7 @@ export async function executeInvokeTx(params: {
 // ============================================================
 
 export type SignHashFn = (messageHash: string) => Promise<string[]>;
+export type SignTransactionHashFn = (messageHash: string) => Promise<string[]>;
 
 async function signMessageHash(params: {
   messageHash: string;
@@ -277,10 +277,10 @@ async function signTransactionHash(params: {
   messageHash: string;
   privateKeyHex: string;
   scriptType?: ScriptType;
-  signHash?: SignHashFn;
+  signTransactionHash?: SignTransactionHashFn;
 }): Promise<string[]> {
-  if (params.signHash) {
-    return params.signHash(params.messageHash);
+  if (params.signTransactionHash) {
+    return params.signTransactionHash(params.messageHash);
   }
   return signStarknetTransactionHash(
     params.privateKeyHex,
@@ -342,10 +342,7 @@ export async function signStarknetHash(
   messageHash: string,
   scriptType: ScriptType = ScriptType.NATIVE_SEGWIT,
 ): Promise<string[]> {
-  const hashHex = messageHash.startsWith('0x')
-    ? messageHash.slice(2)
-    : messageHash;
-  const padded = hashHex.padStart(64, '0');
+  const padded = getOffchainSignatureHash(messageHash).replace(/^0x/i, '').padStart(64, '0');
 
   const sig = await signBitcoinMessage(privateKeyHex.replace(/^0x/, ''), padded, scriptType);
 
@@ -367,14 +364,8 @@ export async function signStarknetTransactionHash(
   txHash: string,
   scriptType: ScriptType = ScriptType.NATIVE_SEGWIT,
 ): Promise<string[]> {
-  return [
-    ...(await signStarknetHash(
-      privateKeyHex,
-      getTransactionSignatureHash(txHash),
-      scriptType,
-    )),
-    TX_SIGNATURE_DOMAIN_TAG,
-  ];
+  const signer = new OneKeyBitcoinSigner(privateKeyHex, computeStarknetAddress(privateKeyHex).pubkeyHash, scriptType);
+  return (await signer.signTransactionHash(txHash)) as string[];
 }
 
 /**
@@ -483,7 +474,7 @@ export async function proveAndExecute(params: {
   serverActions: string[];
   scriptType?: ScriptType;
   signHash?: SignHashFn;
-  signTransactionHash?: SignHashFn;
+  signTransactionHash?: SignTransactionHashFn;
 }): Promise<string> {
   if (!PROVING_SERVICE_URL) throw new Error('PROVING_SERVICE_URL not set');
 
@@ -640,12 +631,11 @@ export async function proveAndExecute(params: {
   });
   console.log('  On-chain TX hash:', onchainTxHash);
 
-  // Sign the on-chain hash
-  const onchainSig = await signTransactionHash({
+  const txSignature = await signTransactionHash({
     privateKeyHex: params.privateKeyHex,
     messageHash: onchainTxHash,
     scriptType: params.scriptType,
-    signHash: params.signTransactionHash,
+    signTransactionHash: params.signTransactionHash,
   });
 
   // Submit via raw RPC with proof_facts + proof
@@ -657,14 +647,14 @@ export async function proveAndExecute(params: {
       jsonrpc: '2.0',
       method: 'starknet_addInvokeTransaction',
       params: {
-        invoke_transaction: {
-          type: 'INVOKE',
-          version: '0x3',
-          sender_address: params.starknetAddress,
-          calldata: applyCalldata,
-          signature: onchainSig,
-          nonce: userNonceHex,
-          resource_bounds: {
+          invoke_transaction: {
+            type: 'INVOKE',
+            version: '0x3',
+            sender_address: params.starknetAddress,
+            calldata: applyCalldata,
+            signature: txSignature,
+            nonce: userNonceHex,
+            resource_bounds: {
             l1_gas: {
               max_amount: toHexStr(onchainRb.l1_gas.max_amount.toString()),
               max_price_per_unit: toHexStr(
@@ -691,11 +681,11 @@ export async function proveAndExecute(params: {
           account_deployment_data: [],
           nonce_data_availability_mode: 'L1',
           fee_data_availability_mode: 'L1',
-          proof_facts: proofFacts,
-          proof,
+            proof_facts: proofFacts,
+            proof,
+          },
         },
-      },
-      id: 1,
+        id: 1,
     }),
   });
 
