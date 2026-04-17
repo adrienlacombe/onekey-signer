@@ -1,9 +1,8 @@
 /**
  * OneKey hardware wallet integration.
- * Connects via WebUSB, reads Bitcoin public keys, and signs messages.
+ * Uses the official WebUSB flow for physical devices and a local transport for the simulator.
  */
 import SDK from '@onekeyfe/hd-web-sdk';
-const HardwareSDK = SDK.HardwareWebSdk;
 import { getBtcDerivationPath } from '../config/constants';
 import {
   ONEKEY_SIMULATOR_API_BASE,
@@ -11,9 +10,37 @@ import {
   ONEKEY_SIMULATOR_REVIEW_URL,
 } from '../config/constants';
 
+const HardwareSDK = SDK.HardwareSDKLowLevel;
+const ONEKEY_WEBUSB_FILTER = [
+  { vendorId: 0x1209, productId: 0x53c0 },
+  { vendorId: 0x1209, productId: 0x53c1 },
+  { vendorId: 0x1209, productId: 0x4f4a },
+  { vendorId: 0x1209, productId: 0x4f4b },
+];
+
+const UI_EVENT = 'UI_EVENT';
+const UI_REQUEST_PIN = 'ui-request_pin';
+const UI_REQUEST_PASSPHRASE = 'ui-request_passphrase';
+const UI_REQUEST_PASSPHRASE_ON_DEVICE = 'ui-request_passphrase_on_device';
+const UI_RESPONSE_PIN = 'ui-receive_pin';
+const UI_RESPONSE_PASSPHRASE = 'ui-receive_passphrase';
+const PIN_ON_DEVICE_SENTINEL = '@@ONEKEY_INPUT_PIN_IN_DEVICE';
+
 let sdkInitialized = false;
+let sdkEventsBound = false;
 let currentConnectId: string | null = null;
 let currentDeviceId: string | null = null;
+
+function decodeSignatureBytes(signature: string): Uint8Array {
+  const trimmed = signature.trim();
+  const hex = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
+
+  if (/^[0-9a-f]+$/i.test(hex) && hex.length % 2 === 0) {
+    return Uint8Array.from(Buffer.from(hex, 'hex'));
+  }
+
+  return Uint8Array.from(atob(trimmed), (c) => c.charCodeAt(0));
+}
 
 async function simulatorRequest<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${ONEKEY_SIMULATOR_API_BASE}${path}`, {
@@ -34,15 +61,127 @@ export function isOneKeySimulatorModeEnabled(): boolean {
   return ONEKEY_SIMULATOR_ENABLED;
 }
 
+function supportsBrowserWebUsb(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const browserNavigator = navigator as Navigator & { usb?: unknown };
+  return typeof browserNavigator.usb !== 'undefined';
+}
+
+function bindOneKeyUiEvents(): void {
+  if (sdkEventsBound) return;
+
+  HardwareSDK.addHardwareGlobalEventListener(async (message: any) => {
+    if (message?.event !== UI_EVENT) return;
+
+    switch (message?.type) {
+      case UI_REQUEST_PIN:
+        await HardwareSDK.uiResponse({
+          type: UI_RESPONSE_PIN,
+          payload: PIN_ON_DEVICE_SENTINEL,
+        });
+        break;
+      case UI_REQUEST_PASSPHRASE:
+      case UI_REQUEST_PASSPHRASE_ON_DEVICE:
+        await HardwareSDK.uiResponse({
+          type: UI_RESPONSE_PASSPHRASE,
+          payload: { passphraseOnDevice: true, value: '' },
+        });
+        break;
+      default:
+        break;
+    }
+  });
+
+  sdkEventsBound = true;
+}
+
 export async function initOneKeySDK(): Promise<void> {
   if (ONEKEY_SIMULATOR_ENABLED) return;
   if (sdkInitialized) return;
-  await HardwareSDK.init({
+  if (!supportsBrowserWebUsb()) {
+    throw new Error('WebUSB requires Chrome or Edge on desktop.');
+  }
+
+  bindOneKeyUiEvents();
+  const initialized = await HardwareSDK.init({
+    env: 'webusb',
     debug: false,
-    connectSrc: 'https://jssdk.onekey.so/0.3.49/',
     fetchConfig: true,
   });
+
+  if (!initialized) {
+    throw new Error('Failed to initialize the OneKey WebUSB SDK.');
+  }
+
   sdkInitialized = true;
+}
+
+async function authorizeBrowserWebUsb(): Promise<void> {
+  const browserNavigator = navigator as Navigator & {
+    usb?: {
+      requestDevice(options: { filters: Array<{ vendorId: number; productId: number }> }): Promise<unknown>;
+    };
+  };
+
+  if (!browserNavigator.usb) {
+    throw new Error('WebUSB is not available in this browser.');
+  }
+
+  try {
+    await browserNavigator.usb.requestDevice({ filters: ONEKEY_WEBUSB_FILTER });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/cancel|abort|dismiss/i.test(message)) {
+      throw new Error('The WebUSB device chooser was dismissed.');
+    }
+    throw error;
+  }
+}
+
+function setCurrentDevice(device: {
+  connectId?: string | null;
+  deviceId?: string | null;
+}): { connectId: string; deviceId: string } {
+  currentConnectId = device.connectId ?? null;
+  currentDeviceId = device.deviceId ?? null;
+
+  if (!currentConnectId) {
+    throw new Error('Device connection failed — missing connectId');
+  }
+  if (!currentDeviceId) {
+    throw new Error('OneKey connected but device_id is unavailable. Unlock it and open the Bitcoin app, then try again.');
+  }
+
+  return { connectId: currentConnectId, deviceId: currentDeviceId };
+}
+
+async function discoverAuthorizedDevice(): Promise<{
+  connectId: string;
+  deviceId: string;
+}> {
+  const searchResult = await HardwareSDK.searchDevices();
+  if (!searchResult.success) {
+    throw new Error((searchResult.payload as any)?.error || 'OneKey device search failed.');
+  }
+
+  const device = searchResult.payload?.[0];
+  if (!device?.connectId) {
+    throw new Error('No authorized OneKey device found. Approve the USB chooser, unlock the device, and open the Bitcoin app.');
+  }
+
+  if (device.deviceId) {
+    return setCurrentDevice(device);
+  }
+
+  const features = await HardwareSDK.getFeatures(device.connectId);
+  if (!features.success) {
+    throw new Error((features.payload as any)?.error || 'Failed to query OneKey device features.');
+  }
+
+  return setCurrentDevice({
+    connectId: device.connectId,
+    deviceId: (features.payload as any)?.device_id ?? null,
+  });
 }
 
 export async function connectOneKey(): Promise<{
@@ -57,23 +196,16 @@ export async function connectOneKey(): Promise<{
     currentConnectId = device.connectId ?? 'simulator';
     currentDeviceId = device.deviceId ?? null;
     if (!currentDeviceId) {
-      throw new Error(`Simulator connection failed. Open ${ONEKEY_SIMULATOR_REVIEW_URL} and make sure the emulator is running.`);
+      throw new Error(
+        `Simulator connection failed. Open ${ONEKEY_SIMULATOR_REVIEW_URL} and make sure the emulator is running.`,
+      );
     }
     return { connectId: currentConnectId, deviceId: currentDeviceId };
   }
 
   await initOneKeySDK();
-  const result = await HardwareSDK.searchDevices();
-  if (!result.success || !result.payload?.length) {
-    throw new Error('No OneKey device found. Make sure it is connected and unlocked.');
-  }
-  const device = result.payload[0];
-  currentConnectId = device.connectId ?? null;
-  currentDeviceId = device.deviceId ?? null;
-  if (!currentConnectId || !currentDeviceId) {
-    throw new Error('Device connection failed — missing connectId or deviceId');
-  }
-  return { connectId: currentConnectId, deviceId: currentDeviceId };
+  await authorizeBrowserWebUsb();
+  return discoverAuthorizedDevice();
 }
 
 export async function getBtcPublicKey(accountIndex: number = 0): Promise<{
@@ -131,14 +263,20 @@ export async function signWithOneKey(
     throw new Error(`btcSignMessage failed: ${(result.payload as any)?.error || 'unknown'}`);
   }
   const payload = result.payload as any;
-  // OneKey returns base64-encoded 65-byte compact signature
-  const sigBytes = Uint8Array.from(atob(payload.signature), (c) => c.charCodeAt(0));
+  const sigBytes = decodeSignatureBytes(String(payload.signature || ''));
+  if (sigBytes.length !== 65) {
+    throw new Error(`Unexpected OneKey signature length: expected 65 bytes, got ${sigBytes.length}.`);
+  }
   const byte0 = sigBytes[0];
   // byte0 = 27 + recovery_id + 4(compressed) + script_type_offset
-  const recovery = (byte0 - 27 - 4) % 4; // strip compressed flag, get recovery mod 4
+  const recovery = (byte0 - 27 - 4) % 4;
   const v = recovery >= 0 ? recovery : 0;
-  const r = Array.from(sigBytes.slice(1, 33)).map((b) => b.toString(16).padStart(2, '0')).join('');
-  const s = Array.from(sigBytes.slice(33, 65)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const r = Array.from(sigBytes.slice(1, 33))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  const s = Array.from(sigBytes.slice(33, 65))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
   return { v, r, s };
 }
 

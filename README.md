@@ -21,6 +21,7 @@ This repository contains:
 - a Starknet Sepolia RPC endpoint
 - AVNU, discovery-service, and proving-service access
 - optional: a physical OneKey device if you are not using the simulator
+- a WebUSB-capable browser (Chrome or Edge on desktop) if using a physical OneKey
 
 ## Initial Setup
 
@@ -177,6 +178,12 @@ Current simulator UI flow:
 
 The UI also shows a `Private Pool Balance` card.
 
+Physical device flow notes:
+
+- Connecting triggers a browser WebUSB chooser. Approve the OneKey entry once; Chrome/Edge will remember it for the origin.
+- PIN and passphrase are always entered on the device itself. The web app does not prompt for either.
+- Deposits and withdrawals pause with a `Waiting for the prover to catch up...` status while the proving service reaches the pinned block (latest − 20, with an extra ~25-block finality margin after an approval). This is expected and usually clears within a minute.
+
 Notes about balance and discovery:
 
 - The private balance is sourced from the discovery service, not from a single on-chain balance slot.
@@ -188,6 +195,9 @@ Notes about balance and discovery:
 - `compile_actions` reverts are privacy-pool action construction failures, not simulator transport failures.
 - If `Set Viewing Key` fails for an already initialized account, check whether the account already has a viewing key on Sepolia.
 - If the simulator transport reports timeouts or empty output, restart the web dev server and reopen the noVNC tab before assuming the bridge is broken.
+- `WebUSB requires Chrome or Edge on desktop.` means the current browser has no `navigator.usb`. Switch browsers; Safari and Firefox are not supported.
+- If the USB chooser closes with no device listed, unlock the OneKey and open the Bitcoin app before retrying. The SDK only enumerates devices in app mode.
+- A long `Waiting for the prover to catch up...` message after a deposit/withdraw means the RPC tip has not yet reached the block the proof was pinned to. Wait for it to clear rather than retrying immediately.
 
 ## Notes
 

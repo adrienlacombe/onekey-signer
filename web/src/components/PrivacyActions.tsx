@@ -52,7 +52,16 @@ interface PrivateBalanceSnapshot {
   registered: boolean;
 }
 
+interface ProveContext {
+  latestBlock: number;
+  proveBlock: number;
+}
+
 const provider = new RpcProvider({ nodeUrl: STARKNET_RPC_URL });
+const PROVER_BLOCK_LAG = 20;
+const PROVER_FINALITY_MARGIN = 25;
+const PROVER_POLL_INTERVAL_MS = 3000;
+const PROVER_MAX_POLLS = 60;
 
 function toHexStr(value: string | bigint): string {
   if (typeof value === 'string' && value.startsWith('0x')) return value;
@@ -97,6 +106,73 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     updateTx(txHash, ok ? 'accepted' : 'reverted');
     return ok;
   };
+
+  const getProveContext = useCallback(async (): Promise<ProveContext> => {
+    const latestBlock = await provider.getBlockNumber();
+    return {
+      latestBlock,
+      proveBlock: Math.max(latestBlock - PROVER_BLOCK_LAG, 0),
+    };
+  }, []);
+
+  const waitForProverVisibility = useCallback(
+    async (targetBlock: number, reason: string): Promise<ProveContext> => {
+      for (let attempt = 0; attempt < PROVER_MAX_POLLS; attempt += 1) {
+        const context = await getProveContext();
+        if (context.latestBlock >= targetBlock) {
+          return context;
+        }
+        if (attempt === 0 || attempt % 5 === 0) {
+          setStatus(
+            `Waiting for the prover to catch up after the recent ${reason} (${context.latestBlock}/${targetBlock})...`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, PROVER_POLL_INTERVAL_MS));
+      }
+
+      throw new Error(
+        `The proving service is still behind the recent ${reason}. Wait about a minute and try again.`,
+      );
+    },
+    [getProveContext],
+  );
+
+  const isNoteVisibleAtBlock = useCallback(async (noteId: string, blockNumber: number): Promise<boolean> => {
+    try {
+      const note = await provider.callContract(
+        {
+          contractAddress: PRIVACY_POOL_ADDRESS,
+          entrypoint: 'get_note',
+          calldata: [noteId],
+        },
+        blockNumber as any,
+      );
+      return note[0] !== '0x0' && note[0] !== '0';
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const waitForNotesVisibleToProver = useCallback(
+    async (notes: PrivatePoolNote[]): Promise<ProveContext> => {
+      for (let attempt = 0; attempt < PROVER_MAX_POLLS; attempt += 1) {
+        const context = await getProveContext();
+        const visible = await Promise.all(notes.map((note) => isNoteVisibleAtBlock(note.id, context.proveBlock)));
+        if (visible.every(Boolean)) {
+          return context;
+        }
+        if (attempt === 0 || attempt % 5 === 0) {
+          setStatus('Waiting for the prover to catch up to recent private notes...');
+        }
+        await new Promise((resolve) => setTimeout(resolve, PROVER_POLL_INTERVAL_MS));
+      }
+
+      throw new Error(
+        'Recent private notes are not visible to the proving service yet. Wait about a minute and try again.',
+      );
+    },
+    [getProveContext, isNoteVisibleAtBlock],
+  );
 
   const getViewingKey = useCallback(async (): Promise<string> => {
     const result = await provider.callContract({
@@ -214,7 +290,11 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
   }, [refreshPrivateBalance]);
 
   const compileVariants = useCallback(
-    async (privacyKey: string, variants: string[][][]): Promise<CompiledVariant> => {
+    async (
+      privacyKey: string,
+      variants: string[][][],
+      blockIdentifier?: number,
+    ): Promise<CompiledVariant> => {
       let lastError: unknown = null;
 
       for (const variant of variants) {
@@ -225,7 +305,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
               contractAddress: PRIVACY_POOL_ADDRESS,
               entrypoint: 'compile_actions',
               calldata: clientActions,
-            })),
+            }, blockIdentifier)),
           ];
           return { clientActions, serverActions };
         } catch (e) {
@@ -253,16 +333,20 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
 
       const privacyKey = derivePrivacyKey(pubkeyHash, address);
       setStatus('Compiling viewing key action...');
+      const { proveBlock } = await getProveContext();
 
       const clientActions = [address, privacyKey, '1', '0', randomFelt()];
-      const serverActions = await provider.callContract({
-        contractAddress: PRIVACY_POOL_ADDRESS,
-        entrypoint: 'compile_actions',
-        calldata: clientActions,
-      });
+      const serverActions = await provider.callContract(
+        {
+          contractAddress: PRIVACY_POOL_ADDRESS,
+          entrypoint: 'compile_actions',
+          calldata: clientActions,
+        },
+        proveBlock as any,
+      );
 
       setStatus('Building proof (this takes ~30s)...');
-      const txHash = await proveAndExecute(clientActions, [...serverActions]);
+      const txHash = await proveAndExecute(clientActions, [...serverActions], proveBlock);
       const ok = await waitTx(txHash, 'Set Viewing Key');
 
       if (ok) {
@@ -278,7 +362,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     } finally {
       setBusyAction(null);
     }
-  }, [address, getViewingKey, pubkeyHash, refreshPrivateBalance]);
+  }, [address, getProveContext, getViewingKey, pubkeyHash, refreshPrivateBalance]);
 
   const deposit = useCallback(async () => {
     setBusyAction('deposit');
@@ -311,7 +395,17 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
           },
         },
       );
-      await waitTx(approveTx.transaction_hash, 'Approve STRK');
+      const approveOk = await waitTx(approveTx.transaction_hash, 'Approve STRK');
+      if (!approveOk) {
+        setStatus('Approve failed');
+        return;
+      }
+
+      const approvalSeenAt = await provider.getBlockNumber();
+      const { proveBlock } = await waitForProverVisibility(
+        approvalSeenAt + PROVER_FINALITY_MARGIN,
+        'approval',
+      );
 
       setStatus('Step 2/4: Building private deposit...');
       const channelKey = computeChannelKey(address, privacyKey, address, publicViewingKey);
@@ -320,12 +414,14 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         PRIVACY_POOL_ADDRESS,
         address,
         privacyKey,
+        proveBlock,
       );
       const nextNoteIndex = await getNextNoteIndex(
         provider,
         PRIVACY_POOL_ADDRESS,
         channelKey,
         normalizedStrkAddress,
+        proveBlock,
       );
       const selfChannelExists = nextChannelIndex > 0;
 
@@ -362,10 +458,10 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
             [depositAction, createSelfNoteAction],
           ];
 
-      const { clientActions, serverActions } = await compileVariants(privacyKey, variants);
+      const { clientActions, serverActions } = await compileVariants(privacyKey, variants, proveBlock);
 
       setStatus('Step 3/4: Building proof and submitting...');
-      const txHash = await proveAndExecute(clientActions, serverActions);
+      const txHash = await proveAndExecute(clientActions, serverActions, proveBlock);
       setStatus('Step 4/4: Waiting for confirmation...');
       const ok = await waitTx(txHash, `Deposit ${depositAmt} STRK`);
 
@@ -392,8 +488,8 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     normalizedStrkAddress,
     onRefreshBalance,
     privateBalance,
-    refreshPrivateBalance,
     waitForPrivateBalanceChange,
+    waitForProverVisibility,
   ]);
 
   const withdraw = useCallback(async () => {
@@ -406,6 +502,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       const recipient = withdrawTo.trim() ? normalizeHex(withdrawTo.trim()) : address;
       const { poolState, privacyKey, publicViewingKey } = await loadPrivatePoolState();
       const { change, selected } = selectNotesForAmount(poolState.notes, amount);
+      const { proveBlock } = await waitForNotesVisibleToProver(selected);
 
       setStatus('Step 1/3: Preparing private withdrawal...');
       const changeChannelKey = computeChannelKey(address, privacyKey, address, publicViewingKey);
@@ -414,12 +511,14 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         PRIVACY_POOL_ADDRESS,
         address,
         privacyKey,
+        proveBlock,
       );
       const nextNoteIndex = await getNextNoteIndex(
         provider,
         PRIVACY_POOL_ADDRESS,
         changeChannelKey,
         normalizedStrkAddress,
+        proveBlock,
       );
       const selfChannelExists = nextChannelIndex > 0;
 
@@ -475,10 +574,10 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         variants.push([...useNoteActions, withdrawAction]);
       }
 
-      const { clientActions, serverActions } = await compileVariants(privacyKey, variants);
+      const { clientActions, serverActions } = await compileVariants(privacyKey, variants, proveBlock);
 
       setStatus('Step 2/3: Building proof and submitting...');
-      const txHash = await proveAndExecute(clientActions, serverActions);
+      const txHash = await proveAndExecute(clientActions, serverActions, proveBlock);
       setStatus('Step 3/3: Waiting for confirmation...');
       const ok = await waitTx(txHash, `Withdraw ${withdrawAmt} STRK`);
 
@@ -503,16 +602,18 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     normalizedStrkAddress,
     onRefreshBalance,
     privateBalance,
-    refreshPrivateBalance,
     waitForPrivateBalanceChange,
+    waitForNotesVisibleToProver,
     withdrawAmt,
     withdrawTo,
   ]);
 
-  async function proveAndExecute(clientActions: string[], serverActions: string[]): Promise<string> {
+  async function proveAndExecute(
+    clientActions: string[],
+    serverActions: string[],
+    proveBlock: number,
+  ): Promise<string> {
     const chainId = await provider.getChainId();
-    const latestBlock = await provider.getBlockNumber();
-    const proveBlock = latestBlock - 20;
     const poolNonce = await provider.getNonceForAddress(PRIVACY_POOL_ADDRESS, proveBlock as any);
     const poolNonceHex = poolNonce.startsWith('0x') ? poolNonce : '0x' + BigInt(poolNonce).toString(16);
     const innerCalldata = clientActions.map(toHexStr);

@@ -3,6 +3,7 @@ import { ec, type RpcProvider } from 'starknet';
 const EC_ORDER = 0x0800000000000010ffffffffffffffffb781126dcae7b2321e66a241adc64d2fn;
 const MAX_PRIVATE_KEY = EC_ORDER / 2n - 1n;
 const STRK_DECIMALS = 10n ** 18n;
+type PoolBlockIdentifier = Parameters<RpcProvider['callContract']>[1];
 
 type ApiSubchannelCursor = {
   note_discovery_complete?: boolean;
@@ -224,6 +225,7 @@ export async function getNextChannelIndex(
   poolAddress: string,
   senderAddress: string,
   senderPrivacyKey: string,
+  blockIdentifier?: PoolBlockIdentifier,
 ): Promise<number> {
   for (let i = 0; i < 1000; i += 1) {
     const id = computeOutgoingChannelId(senderAddress, senderPrivacyKey, i);
@@ -232,7 +234,7 @@ export async function getNextChannelIndex(
         contractAddress: poolAddress,
         entrypoint: 'get_outgoing_channel_info',
         calldata: [id],
-      });
+      }, blockIdentifier);
       if (info[0] === '0x0' || info[0] === '0') return i;
     } catch {
       return i;
@@ -247,6 +249,7 @@ export async function getNextNoteIndex(
   poolAddress: string,
   channelKey: string,
   token: string,
+  blockIdentifier?: PoolBlockIdentifier,
 ): Promise<number> {
   for (let i = 0; i < 1000; i += 1) {
     const noteId = computeNoteId(channelKey, token, i);
@@ -255,7 +258,7 @@ export async function getNextNoteIndex(
         contractAddress: poolAddress,
         entrypoint: 'get_note',
         calldata: [noteId],
-      });
+      }, blockIdentifier);
       if (note[0] === '0x0' || note[0] === '0') return i;
     } catch {
       return i;

@@ -100,6 +100,13 @@ The old combined `Deposit + Withdraw` flow is gone.
 
 The web app has a `Private Pool Balance` card. That balance is derived from discovery-service note state, not a single on-chain balance field.
 
+### Physical OneKey Transport
+
+- `web/src/lib/onekey.ts` uses `SDK.HardwareSDKLowLevel` with `env: 'webusb'`. Do not revert to `HardwareWebSdk` / `connectSrc` — the low-level transport is what lets the app call `navigator.usb.requestDevice` with the OneKey vendor/product filter and drive the device directly.
+- `connectOneKey` authorizes the device via the browser USB chooser, then calls `searchDevices` and falls back to `getFeatures` to recover `deviceId` when the search result omits it.
+- PIN and passphrase are bound to on-device entry: the global UI event listener auto-responds with `@@ONEKEY_INPUT_PIN_IN_DEVICE` for `ui-request_pin` and `{ passphraseOnDevice: true, value: '' }` for passphrase requests. The app must never prompt for either in the UI.
+- `btcSignMessage` can return the signature as hex or base64; the `decodeSignatureBytes` helper handles both and expects exactly 65 bytes.
+
 ## Privacy Pool Integration Pitfalls
 
 - Normalize hex values before comparing addresses or token IDs. Leading-zero mismatches already caused the UI to hide valid STRK notes.
@@ -107,6 +114,8 @@ The web app has a `Private Pool Balance` card. That balance is derived from disc
 - `compile_actions` failures are usually action-construction problems, not simulator transport problems.
 - `Set Viewing Key` can legitimately fail on Sepolia if that account already has a non-zero public key registered.
 - After accepted deposits or withdrawals, discovery can lag. The UI now polls after successful transactions, but stale local state is still a common debugging angle.
+- All reads used to build a proof must be pinned to the same `proveBlock = latest - 20`. That includes `compile_actions`, `get_outgoing_channel_info`, `get_note`, and the pool nonce. `PrivacyActions.tsx` threads `proveBlock` through `compileVariants`, `getNextChannelIndex`, `getNextNoteIndex`, and `proveAndExecute` — keep that invariant if you touch either file.
+- Deposits wait for the RPC tip to advance `PROVER_FINALITY_MARGIN` (25) blocks past the approve tx before picking a `proveBlock`. Withdrawals wait until every selected note is visible at `proveBlock` via `get_note`. Both loops surface a `Waiting for the prover to catch up...` status; tune the constants at the top of `PrivacyActions.tsx` if the proving service changes its lag.
 
 ## E2E Notes
 
