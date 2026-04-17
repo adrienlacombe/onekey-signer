@@ -117,6 +117,13 @@ The web app has a `Private Pool Balance` card. That balance is derived from disc
 - All reads used to build a proof must be pinned to the same `proveBlock = latest - 20`. That includes `compile_actions`, `get_outgoing_channel_info`, `get_note`, and the pool nonce. `PrivacyActions.tsx` threads `proveBlock` through `compileVariants`, `getNextChannelIndex`, `getNextNoteIndex`, and `proveAndExecute` — keep that invariant if you touch either file.
 - Deposits wait for the RPC tip to advance `PROVER_FINALITY_MARGIN` (25) blocks past the approve tx before picking a `proveBlock`. Withdrawals wait until every selected note is visible at `proveBlock` via `get_note`. Both loops surface a `Waiting for the prover to catch up...` status; tune the constants at the top of `PrivacyActions.tsx` if the proving service changes its lag.
 
+## Signer Domain Separation
+
+- `src/signer.ts` exposes two distinct signing entry points that must not be swapped:
+  - `signHash(offchainHash)` — 5-felt OFFCHAIN signature used by `is_valid_signature` and anything that verifies via the contract's generic signature check.
+  - `signTransactionHash(txHash)` — 6-felt signature with a trailing transaction marker, used for actual Starknet transaction authorization.
+- `PrivacyActions.tsx` calls `signer.signTransactionHash(onchainHash)` when submitting the proof-carrying tx. If you refactor the web signer path, keep the domain split — reverting to `signHash` for transactions will fail account validation.
+
 ## E2E Notes
 
 - The Sepolia tests use the emulator for signing, but still derive local bookkeeping keys from `ONEKEY_EMULATOR_MNEMONIC`.
