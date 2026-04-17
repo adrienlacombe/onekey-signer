@@ -37,7 +37,7 @@ pub mod OnekeyBitcoinAccount {
     use starknet::account::Call;
     use starknet::secp256_trait::Signature as Secp256Signature;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
-    use starknet::{SyscallResultTrait, get_caller_address, get_tx_info};
+    use starknet::{SyscallResultTrait, get_caller_address, get_contract_address, get_tx_info};
 
     // ISRC6 interface ID
     const ISRC6_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
@@ -64,6 +64,8 @@ pub mod OnekeyBitcoinAccount {
         pub const INVALID_SIGNATURE: felt252 = 'Account: invalid signature';
         pub const INVALID_TX_VERSION: felt252 = 'Account: invalid tx version';
         pub const ZERO_PUBKEY: felt252 = 'Account: zero pubkey hash';
+        pub const PUBKEY_MISMATCH: felt252 = 'Account: pubkey mismatch';
+        pub const SELF_CALL: felt252 = 'Account: self-call disallowed';
     }
 
     #[constructor]
@@ -81,8 +83,10 @@ pub mod OnekeyBitcoinAccount {
         fn __execute__(ref self: ContractState, calls: Array<Call>) -> Array<Span<felt252>> {
             assert(get_caller_address().is_zero(), Errors::INVALID_CALLER);
             self._assert_supported_tx_version();
+            let self_address = get_contract_address();
             let mut results: Array<Span<felt252>> = array![];
             for call in calls.span() {
+                assert(*call.to != self_address, Errors::SELF_CALL);
                 let res = starknet::syscalls::call_contract_syscall(*call.to, *call.selector, *call.calldata)
                     .unwrap_syscall();
                 results.append(res);
@@ -110,6 +114,7 @@ pub mod OnekeyBitcoinAccount {
     fn __validate_deploy__(
         self: @ContractState, class_hash: felt252, contract_address_salt: felt252, pubkey_hash: felt252,
     ) -> felt252 {
+        assert(pubkey_hash == self.pubkey_hash.read(), Errors::PUBKEY_MISMATCH);
         self._validate_tx()
     }
 
@@ -145,10 +150,14 @@ pub mod OnekeyBitcoinAccount {
 
         /// Validate the current transaction's signature.
         fn _validate_tx(self: @ContractState) -> felt252 {
+            assert(get_caller_address().is_zero(), Errors::INVALID_CALLER);
             self._assert_supported_tx_version();
             let tx_info = get_tx_info().unbox();
             assert(
-                self._is_valid_transaction_signature(tx_info.transaction_hash, tx_info.signature),
+                self
+                    ._is_valid_transaction_signature(
+                        tx_info.transaction_hash, tx_info.chain_id, tx_info.signature,
+                    ),
                 Errors::INVALID_SIGNATURE,
             );
             starknet::VALIDATED
@@ -164,7 +173,9 @@ pub mod OnekeyBitcoinAccount {
         }
 
         /// Parse a 6-felt transaction signature and verify the transaction-auth domain hash.
-        fn _is_valid_transaction_signature(self: @ContractState, tx_hash: felt252, signature: Span<felt252>) -> bool {
+        fn _is_valid_transaction_signature(
+            self: @ContractState, tx_hash: felt252, chain_id: felt252, signature: Span<felt252>,
+        ) -> bool {
             if signature.len() != 6 {
                 return false;
             }
@@ -175,7 +186,9 @@ pub mod OnekeyBitcoinAccount {
                 Option::Some(sig) => sig,
                 Option::None => { return false; },
             };
-            is_valid_bitcoin_signature(get_transaction_signature_hash(tx_hash), self.pubkey_hash.read(), sig)
+            is_valid_bitcoin_signature(
+                get_transaction_signature_hash(tx_hash, chain_id), self.pubkey_hash.read(), sig,
+            )
         }
 
         fn _parse_signature(
