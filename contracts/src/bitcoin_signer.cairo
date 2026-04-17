@@ -15,8 +15,8 @@ pub const TX_SIGNATURE_DOMAIN_TAG: felt252 = 0x4f4e454b45595f54585f415554485f563
 pub const OFFCHAIN_SIGNATURE_DOMAIN_TAG: felt252 = 0x4f4e454b45595f4f4646434841494e5f5631; // "ONEKEY_OFFCHAIN_V1"
 
 #[must_use]
-pub fn get_transaction_signature_hash(tx_hash: felt252) -> felt252 {
-    poseidon_hash_span(array![TX_SIGNATURE_DOMAIN_TAG, tx_hash].span())
+pub fn get_transaction_signature_hash(tx_hash: felt252, chain_id: felt252) -> felt252 {
+    poseidon_hash_span(array![TX_SIGNATURE_DOMAIN_TAG, chain_id, tx_hash].span())
 }
 
 #[must_use]

@@ -86,9 +86,10 @@ function normalizeHashHex(hashHex: string): `0x${string}` {
   return ('0x' + hashHex.replace(/^0x/i, '').padStart(64, '0')) as `0x${string}`;
 }
 
-export function getTransactionSignatureHash(txHash: string): string {
+export function getTransactionSignatureHash(txHash: string, chainId: string): string {
   const domainHash = ec.starkCurve.poseidonHashMany([
     BigInt(TX_SIGNATURE_DOMAIN_TAG),
+    BigInt(chainId),
     BigInt(normalizeHashHex(txHash)),
   ]);
   return '0x' + domainHash.toString(16);
@@ -357,7 +358,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signTransactionHash(msgHash);
+    return this.signTransactionHash(msgHash, String(details.chainId));
   }
 
   async signDeployAccountTransaction(
@@ -378,7 +379,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signTransactionHash(msgHash);
+    return this.signTransactionHash(msgHash, String(details.chainId));
   }
 
   async signDeclareTransaction(
@@ -397,7 +398,7 @@ export class OneKeyBitcoinSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signTransactionHash(msgHash);
+    return this.signTransactionHash(msgHash, String(details.chainId));
   }
 
   /**
@@ -408,9 +409,9 @@ export class OneKeyBitcoinSigner implements SignerInterface {
     return this.signRawHash(getOffchainSignatureHash(offchainHash));
   }
 
-  async signTransactionHash(txHash: string): Promise<Signature> {
+  async signTransactionHash(txHash: string, chainId: string): Promise<Signature> {
     return withTransactionSignatureMarker(
-      await this.signRawHash(getTransactionSignatureHash(txHash)),
+      await this.signRawHash(getTransactionSignatureHash(txHash, chainId)),
     );
   }
 

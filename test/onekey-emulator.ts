@@ -59,7 +59,7 @@ export interface ConfiguredTestWallet {
   address: string;
   signer: SignerInterface;
   signHash: (messageHash: string) => Promise<string[]>;
-  signTransactionHash: (messageHash: string) => Promise<string[]>;
+  signTransactionHash: (messageHash: string, chainId: string) => Promise<string[]>;
 }
 
 let sdkInitialized = false;
@@ -498,7 +498,7 @@ class OneKeyEmulatorSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signTransactionHash(msgHash);
+    return this.signTransactionHash(msgHash, String(details.chainId));
   }
 
   async signDeployAccountTransaction(details: DeployAccountSignerDetails): Promise<Signature> {
@@ -515,7 +515,7 @@ class OneKeyEmulatorSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signTransactionHash(msgHash);
+    return this.signTransactionHash(msgHash, String(details.chainId));
   }
 
   async signDeclareTransaction(details: DeclareSignerDetails): Promise<Signature> {
@@ -532,16 +532,16 @@ class OneKeyEmulatorSigner implements SignerInterface {
       feeDataAvailabilityMode: intDAM(det.feeDataAvailabilityMode),
       tip: det.tip ?? 0,
     } as any);
-    return this.signTransactionHash(msgHash);
+    return this.signTransactionHash(msgHash, String(details.chainId));
   }
 
   async signHash(messageHash: string): Promise<Signature> {
     return this.signRawHash(getOffchainSignatureHash(messageHash));
   }
 
-  async signTransactionHash(txHash: string): Promise<Signature> {
+  async signTransactionHash(txHash: string, chainId: string): Promise<Signature> {
     return [
-      ...((await this.signRawHash(getTransactionSignatureHash(txHash))) as string[]),
+      ...((await this.signRawHash(getTransactionSignatureHash(txHash, chainId))) as string[]),
       TX_SIGNATURE_DOMAIN_TAG,
     ];
   }
@@ -577,8 +577,8 @@ export function createConfiguredTestWallet(params: {
       address,
       signer,
       signHash: async (messageHash: string) => (await signer.signHash(messageHash)) as string[],
-      signTransactionHash: async (messageHash: string) =>
-        (await signer.signTransactionHash(messageHash)) as string[],
+      signTransactionHash: async (messageHash: string, chainId: string) =>
+        (await signer.signTransactionHash(messageHash, chainId)) as string[],
     };
   }
 
@@ -598,7 +598,7 @@ export function createConfiguredTestWallet(params: {
     address,
     signer,
     signHash: async (messageHash: string) => (await signer.signHash(messageHash)) as string[],
-    signTransactionHash: async (messageHash: string) =>
-      (await signer.signTransactionHash(messageHash)) as string[],
+    signTransactionHash: async (messageHash: string, chainId: string) =>
+      (await signer.signTransactionHash(messageHash, chainId)) as string[],
   };
 }

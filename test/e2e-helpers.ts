@@ -259,7 +259,7 @@ export async function executeInvokeTx(params: {
 // ============================================================
 
 export type SignHashFn = (messageHash: string) => Promise<string[]>;
-export type SignTransactionHashFn = (txHash: string) => Promise<string[]>;
+export type SignTransactionHashFn = (txHash: string, chainId: string) => Promise<string[]>;
 
 async function signMessageHash(params: {
   messageHash: string;
@@ -275,16 +275,18 @@ async function signMessageHash(params: {
 
 async function signTransactionHash(params: {
   txHash: string;
+  chainId: string;
   privateKeyHex: string;
   scriptType?: ScriptType;
   signTransactionHash?: SignTransactionHashFn;
 }): Promise<string[]> {
   if (params.signTransactionHash) {
-    return params.signTransactionHash(params.txHash);
+    return params.signTransactionHash(params.txHash, params.chainId);
   }
   return signStarknetTransactionHash(
     params.privateKeyHex,
     params.txHash,
+    params.chainId,
     params.scriptType,
   );
 }
@@ -362,10 +364,11 @@ export async function signStarknetHash(
 export async function signStarknetTransactionHash(
   privateKeyHex: string,
   txHash: string,
+  chainId: string,
   scriptType: ScriptType = ScriptType.NATIVE_SEGWIT,
 ): Promise<string[]> {
   const signer = new OneKeyBitcoinSigner(privateKeyHex, computeStarknetAddress(privateKeyHex).pubkeyHash, scriptType);
-  return (await signer.signTransactionHash(txHash)) as string[];
+  return (await signer.signTransactionHash(txHash, chainId)) as string[];
 }
 
 /**
@@ -634,6 +637,7 @@ export async function proveAndExecute(params: {
   const txSignature = await signTransactionHash({
     privateKeyHex: params.privateKeyHex,
     txHash: onchainTxHash,
+    chainId,
     scriptType: params.scriptType,
     signTransactionHash: params.signTransactionHash,
   });
