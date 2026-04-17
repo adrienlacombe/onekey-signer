@@ -15,8 +15,8 @@
     "test:all": "tsx test/e2e.ts all"
   },
   "dependencies": {
-    "@noble/curves": "^2.0.1",
-    "@noble/hashes": "^2.0.1",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.0.0",
     "@onekeyfe/hd-common-connect-sdk": "^1.1.25",
     "@scure/bip32": "^2.0.1",
