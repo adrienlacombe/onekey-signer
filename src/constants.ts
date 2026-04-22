@@ -5,9 +5,12 @@
 type HexString = `0x${string}`;
 
 // ── Account contract ──────────────────────────────────────────────
-// Replace after running `scarb build` + `sncast declare`
+// Replace after running `scarb build` + `sncast declare`.
+// Composed defenses: chain_id mixing in the Poseidon preimage (cross-chain
+// replay) + "STARKNET_ONEKEY_V1:" prefix inside the Bitcoin-signed-message
+// wrap (cross-domain replay against BIP-137/BIP-322-simple key reuse).
 export const ONEKEY_ACCOUNT_CLASS_HASH: HexString =
-  '0x3dce7815393031793b8f728a628e069c7abb232d11639ab01a516b431e0246b';
+  '0x3fd1bc69954e31b8e0f8c934c530f13510716619f5d080b619563d9615e7eec';
 
 // ── Privacy pool (Sepolia) ────────────────────────────────────────
 export const PRIVACY_POOL_ADDRESS: HexString =

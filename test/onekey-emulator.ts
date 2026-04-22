@@ -20,6 +20,7 @@ import {
 import { ONEKEY_ACCOUNT_CLASS_HASH } from '../src/constants.js';
 import {
   OneKeyBitcoinSigner,
+  STARKNET_AUTH_PREFIX_HEX,
   calculateAccountAddress,
   getOffchainSignatureHash,
   getTransactionSignatureHash,
@@ -547,7 +548,10 @@ class OneKeyEmulatorSigner implements SignerInterface {
   }
 
   private async signRawHash(hashHex: string): Promise<Signature> {
-    const messageHex = normalizeHashHex(hashHex).slice(2);
+    const hashBody = normalizeHashHex(hashHex).slice(2);
+    // Match the Cairo verifier's inner payload: "STARKNET_ONEKEY_V1:" || hash_32B
+    // (the emulator applies the Bitcoin-signed-message wrap around this for us).
+    const messageHex = STARKNET_AUTH_PREFIX_HEX + hashBody;
     const rawSig = await signWithOneKeyEmulator(
       messageHex,
       this.accountIndex,

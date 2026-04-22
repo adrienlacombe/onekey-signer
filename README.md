@@ -204,3 +204,10 @@ Notes about balance and discovery:
 - The repository ignores local secrets, generated artifacts, and the external simulator checkout.
 - The E2E flows target Starknet Sepolia and assume the configured deployed contracts and backend services are valid for that network.
 - Generic `is_valid_signature` checks still use 5-felt off-chain signatures, while actual Starknet transaction authorization now uses a domain-separated 6-felt signature with a transaction marker suffix.
+
+## Account Security Model
+
+- The on-chain account commits to a single `pubkey_hash = poseidon(x.low, x.high, y.low, y.high)` of the secp256k1 public key and never exposes a rotation path. Losing access to the paired OneKey device (or its recovery seed) permanently bricks the account — there is no on-chain recovery, guardian, or timelocked reset. Back up the seed accordingly.
+- The protocol-facing entry points (`__validate__`, `__validate_declare__`, `__validate_deploy__`, `__execute__`) reject any caller other than the Starknet sequencer (caller = 0). They cannot be probed as regular contract calls.
+- The account advertises both SRC5 and SRC6 through `supports_interface` for SNIP-5-aware tooling.
+- Every message handed to the OneKey for signing is prefixed with `"STARKNET_ONEKEY_V1:"` before the Bitcoin-signed-message wrap is applied, so the bytes ultimately double-SHA256'd on the device are `varint(51) || "STARKNET_ONEKEY_V1:" || hash_32B`. This prevents cross-domain replay: a signature produced for any other Bitcoin-signed-message request on the same BIP44 key has a different payload (different length, different content) and cannot be submitted as Starknet auth. Bumping the `V1` suffix is a consensus break — the account class must be redeployed.

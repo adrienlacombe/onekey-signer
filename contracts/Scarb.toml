@@ -12,6 +12,9 @@ allowed-libfuncs-list.name = "all"
 [dependencies]
 starknet = "2.15.0"
 
+[dev-dependencies]
+snforge_std = "0.55.0"
+
 [cairo]
 sierra-replace-ids = true
 

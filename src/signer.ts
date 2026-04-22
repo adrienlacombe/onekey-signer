@@ -2,8 +2,12 @@
  * OneKey Bitcoin signer for Starknet — simulates the OneKey / Trezor
  * legacy Bitcoin message signing format using a raw secp256k1 private key.
  *
- * Signing format (Path 1: Legacy, is_bip322_simple=False):
- *   digest = SHA256(SHA256(varint(24) || "Bitcoin Signed Message:\n" || varint(32) || hash))
+ * Signing format (Path 1: Legacy, is_bip322_simple=False) with a Starknet-specific
+ * domain prefix embedded inside the signed bytes. The prefix is what prevents cross-
+ * domain replay: a normal Bitcoin-signed-message request to the same key cannot
+ * produce the same payload because length + prefix won't match.
+ *   inner  = "STARKNET_ONEKEY_V1:" || hash_32B                          (51 bytes)
+ *   digest = SHA256(SHA256(varint(24) || "Bitcoin Signed Message:\n" || varint(51) || inner))
  *   signature = ECDSA_sign(privkey, digest)
  *
  * 65-byte compact recoverable signature:
@@ -58,6 +62,22 @@ const BITCOIN_MSG_PREFIX = new Uint8Array([
   0x53, 0x69, 0x67, 0x6e, 0x65, 0x64, 0x20, // "Signed "
   0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x3a, 0x0a, // "Message:\n"
 ]);
+
+/**
+ * Starknet domain prefix baked into every message we hand to the Bitcoin signer.
+ * Prepending this to the 32-byte hash makes the signed payload impossible to produce
+ * via a plain "Bitcoin Signed Message" request on the same key, closing cross-domain
+ * replay on BIP-137 / BIP-322-simple tooling.
+ */
+export const STARKNET_AUTH_PREFIX = new Uint8Array([
+  0x53, 0x54, 0x41, 0x52, 0x4b, 0x4e, 0x45, 0x54, // "STARKNET"
+  0x5f,                                           // "_"
+  0x4f, 0x4e, 0x45, 0x4b, 0x45, 0x59,             // "ONEKEY"
+  0x5f,                                           // "_"
+  0x56, 0x31,                                     // "V1"
+  0x3a,                                           // ":"
+]);
+export const STARKNET_AUTH_PREFIX_HEX = '535441524b4e45545f4f4e454b45595f56313a';
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -136,14 +156,20 @@ function normalizeSecpPublicKeyHex(publicKeyHex: string): string {
 // ── Bitcoin message hashing ───────────────────────────────────────
 
 /**
- * Compute the double-SHA256 Bitcoin message digest for a 32-byte hash.
- * SHA256(SHA256(varint(24) || "Bitcoin Signed Message:\n" || varint(32) || hash))
+ * Compute the double-SHA256 Bitcoin message digest for a 32-byte hash, using the
+ * Starknet-scoped inner payload (19-byte prefix + 32-byte hash = 51 bytes).
+ * SHA256(SHA256(
+ *   varint(24) || "Bitcoin Signed Message:\n"
+ *   || varint(51) || "STARKNET_ONEKEY_V1:" || hash
+ * ))
  */
 export function bitcoinMessageDigest(hash32: Uint8Array): Uint8Array {
-  const msg = new Uint8Array(BITCOIN_MSG_PREFIX.length + 1 + 32);
+  const innerLen = STARKNET_AUTH_PREFIX.length + 32; // 51
+  const msg = new Uint8Array(BITCOIN_MSG_PREFIX.length + 1 + innerLen);
   msg.set(BITCOIN_MSG_PREFIX, 0);
-  msg[BITCOIN_MSG_PREFIX.length] = 0x20; // varint(32)
-  msg.set(hash32, BITCOIN_MSG_PREFIX.length + 1);
+  msg[BITCOIN_MSG_PREFIX.length] = innerLen; // varint(51) = 0x33
+  msg.set(STARKNET_AUTH_PREFIX, BITCOIN_MSG_PREFIX.length + 1);
+  msg.set(hash32, BITCOIN_MSG_PREFIX.length + 1 + STARKNET_AUTH_PREFIX.length);
   return sha256(sha256(msg));
 }
 
@@ -165,7 +191,7 @@ export interface OnekeyCompactSignature {
 /**
  * Sign a 32-byte hash using the OneKey/Trezor Bitcoin legacy signing format.
  *
- * 1. Wraps the hash: SHA256(SHA256(prefix || varint(32) || hash))
+ * 1. Wraps the hash: SHA256(SHA256(prefix || varint(51) || "STARKNET_ONEKEY_V1:" || hash))
  * 2. Signs with ECDSA on secp256k1 (via viem, which gives recovery)
  * 3. Produces 65-byte compact: [byte0, r[32], s[32]]
  *    where byte0 = 27 + recovery_id + 4(compressed) + script_type_offset

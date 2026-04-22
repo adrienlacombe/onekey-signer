@@ -41,6 +41,8 @@ pub mod OnekeyBitcoinAccount {
 
     // ISRC6 interface ID
     const ISRC6_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
+    // ISRC5 interface ID (SNIP-5 introspection)
+    const ISRC5_ID: felt252 = 0x3f918d17e5ee77373b56385708f855659a07f75997f365cf87748628532a055;
 
     #[storage]
     struct Storage {
@@ -133,7 +135,7 @@ pub mod OnekeyBitcoinAccount {
         }
 
         fn supports_interface(self: @ContractState, interface_id: felt252) -> bool {
-            interface_id == ISRC6_ID
+            interface_id == ISRC6_ID || interface_id == ISRC5_ID
         }
     }
 
@@ -150,6 +152,7 @@ pub mod OnekeyBitcoinAccount {
 
         /// Validate the current transaction's signature.
         fn _validate_tx(self: @ContractState) -> felt252 {
+            // Only the Starknet protocol (caller = 0) may invoke validate entry points.
             assert(get_caller_address().is_zero(), Errors::INVALID_CALLER);
             self._assert_supported_tx_version();
             let tx_info = get_tx_info().unbox();

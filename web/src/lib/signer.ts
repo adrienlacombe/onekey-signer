@@ -27,6 +27,16 @@ const HALF_CURVE_ORDER = CURVE_ORDER / 2n;
 export const TX_SIGNATURE_DOMAIN_TAG = '0x4f4e454b45595f54585f415554485f5631';
 export const OFFCHAIN_SIGNATURE_DOMAIN_TAG = '0x4f4e454b45595f4f4646434841494e5f5631';
 
+/**
+ * Starknet-scoped prefix ("STARKNET_ONEKEY_V1:") handed to the OneKey before every
+ * `btcSignMessage` call. The device wraps the full payload as a standard Bitcoin
+ * signed message; the Cairo verifier in `bitcoin_signer.cairo` reconstructs the
+ * same 19-byte prefix, so only payloads produced through this app validate on-chain.
+ * Any plain BIP-137/BIP-322-simple signing request on the same key produces a
+ * different (no-prefix) payload and cannot be replayed as Starknet auth.
+ */
+export const STARKNET_AUTH_PREFIX_HEX = '535441524b4e45545f4f4e454b45595f56313a';
+
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
   return ['0x' + (value & mask).toString(16), '0x' + (value >> 128n).toString(16)];
@@ -202,7 +212,10 @@ export class OneKeyHardwareSigner implements SignerInterface {
   }
 
   private async signRawHash(hashHex: string): Promise<Signature> {
-    const messageHex = normalizeHashHex(hashHex).slice(2);
+    const hashBody = normalizeHashHex(hashHex).slice(2);
+    // The device wraps these bytes as `varint(len) || "Bitcoin Signed Message:\n" || …`
+    // — prepending the Starknet prefix domain-separates the produced signature.
+    const messageHex = STARKNET_AUTH_PREFIX_HEX + hashBody;
     const rawSig = await signWithOneKey(messageHex, this.accountIndex);
 
     let r = BigInt('0x' + normalizeScalarHex(rawSig.r, 'r'));

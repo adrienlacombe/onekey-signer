@@ -26,8 +26,15 @@ pub fn get_offchain_signature_hash(message_hash: felt252) -> felt252 {
 
 /// Validates a Bitcoin-style secp256k1 signature against an application-specific 32-byte hash.
 ///
-/// Compliant with the OneKey / Trezor legacy signing format:
-///   digest = SHA256(SHA256(varint(24) || "Bitcoin Signed Message:\n" || varint(32) || hash))
+/// Compliant with the OneKey / Trezor legacy signing format, but the inner payload
+/// carries a Starknet-specific magic prefix so a signature produced for this account
+/// cannot collide with any ordinary "Bitcoin Signed Message" request handed to the same
+/// key by another application (cross-domain replay defense):
+///
+///   digest = SHA256(SHA256(
+///       varint(24) || "Bitcoin Signed Message:\n"
+///       || varint(51) || "STARKNET_ONEKEY_V1:" || hash_32B
+///   ))
 ///
 /// Uses Poseidon hash of recovered public key coordinates instead of keccak256,
 /// making it compatible with the Starknet virtual OS (which lacks keccak support).
@@ -48,11 +55,12 @@ pub fn is_valid_bitcoin_signature(hash: felt252, pubkey_hash: felt252, signature
 
     let hash_u256: u256 = hash.into();
 
-    // Build 58-byte Bitcoin message:
+    // Build 77-byte wrapped message:
     //   varint(24)  = 0x18   (length of "Bitcoin Signed Message:\n")
-    //   "Bitcoin Signed Message:\n"  (24 bytes)
-    //   varint(32)  = 0x20   (length of tx hash)
-    //   tx_hash                      (32 bytes)
+    //   "Bitcoin Signed Message:\n"        (24 bytes)
+    //   varint(51)  = 0x33   (length of Starknet inner payload = 19 + 32)
+    //   "STARKNET_ONEKEY_V1:"              (19 bytes — domain-separates from stock BIP-137)
+    //   hash_32B                           (32 bytes, big-endian)
     let mut msg: ByteArray = "";
 
     // Header length varint + "Bitcoin Signed Message:\n"
@@ -82,10 +90,33 @@ pub fn is_valid_bitcoin_signature(hash: felt252, pubkey_hash: felt252, signature
     msg.append_byte(0x3a); // :
     msg.append_byte(0x0a); // \n
 
-    // Message length varint (32 = 0x20)
-    msg.append_byte(0x20);
+    // Inner payload length varint (51 = 0x33)
+    msg.append_byte(0x33);
 
-    // Append 32-byte tx hash in big-endian
+    // Starknet domain prefix "STARKNET_ONEKEY_V1:" (19 bytes).
+    // Pins every signed payload to this account type so no plain
+    // "Bitcoin Signed Message" request to the same key can ever collide.
+    msg.append_byte(0x53); // S
+    msg.append_byte(0x54); // T
+    msg.append_byte(0x41); // A
+    msg.append_byte(0x52); // R
+    msg.append_byte(0x4b); // K
+    msg.append_byte(0x4e); // N
+    msg.append_byte(0x45); // E
+    msg.append_byte(0x54); // T
+    msg.append_byte(0x5f); // _
+    msg.append_byte(0x4f); // O
+    msg.append_byte(0x4e); // N
+    msg.append_byte(0x45); // E
+    msg.append_byte(0x4b); // K
+    msg.append_byte(0x45); // E
+    msg.append_byte(0x59); // Y
+    msg.append_byte(0x5f); // _
+    msg.append_byte(0x56); // V
+    msg.append_byte(0x31); // 1
+    msg.append_byte(0x3a); // :
+
+    // Append 32-byte hash in big-endian
     append_u128_be(ref msg, hash_u256.high);
     append_u128_be(ref msg, hash_u256.low);
 
