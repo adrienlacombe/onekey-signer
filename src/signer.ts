@@ -43,7 +43,22 @@ import {
   ec,
   typedData as starknetTypedData,
 } from 'starknet';
-import { MAX_PRIVATE_KEY, ScriptType } from './constants.js';
+import { ScriptType } from './constants.js';
+import {
+  PRIVACY_KEY_DOMAIN,
+  type PrivacyKeyChallengeInput,
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+} from './privacyKey.js';
+
+export {
+  PRIVACY_KEY_DOMAIN,
+  type PrivacyKeyChallengeInput,
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+};
 
 // ── secp256k1 curve constants ─────────────────────────────────────
 
@@ -78,8 +93,6 @@ export const STARKNET_AUTH_PREFIX = new Uint8Array([
   0x3a,                                           // ":"
 ]);
 export const STARKNET_AUTH_PREFIX_HEX = '535441524b4e45545f4f4e454b45595f56313a';
-export const PRIVACY_KEY_DOMAIN = 'STARKNET_ONEKEY_PRIVACY_V1:';
-const PRIVACY_KEY_DERIVATION_CONTEXT = 'privacy-key';
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -100,10 +113,6 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-}
-
-function utf8Bytes(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
 }
 
 function concatBytes(parts: Uint8Array[]): Uint8Array {
@@ -133,18 +142,6 @@ function encodeBitcoinVarint(value: number): Uint8Array {
     );
   }
   throw new Error(`Bitcoin message is too large: ${value} bytes.`);
-}
-
-function feltToBytes32(value: string): Uint8Array {
-  const felt = BigInt(value);
-  if (felt < 0n || felt >= (1n << 256n)) {
-    throw new Error(`Expected a non-negative 32-byte field value, got ${value}`);
-  }
-  return hexToBytes(felt.toString(16).padStart(64, '0'));
-}
-
-function scalarToBytes32(value: bigint): Uint8Array {
-  return hexToBytes(value.toString(16).padStart(64, '0'));
 }
 
 function splitU256(value: bigint): [string, string] {
@@ -180,46 +177,6 @@ export function normalizeOneKeySignatureComponents(rawSig: {
   }
 
   return { v, r, s };
-}
-
-export interface PrivacyKeyChallengeInput {
-  chainId: string;
-  poolAddress: string;
-  accountAddress: string;
-  pubkeyHash: string;
-}
-
-export function buildPrivacyKeyChallenge(input: PrivacyKeyChallengeInput): Uint8Array {
-  return concatBytes([
-    utf8Bytes(PRIVACY_KEY_DOMAIN),
-    feltToBytes32(input.chainId),
-    feltToBytes32(input.poolAddress),
-    feltToBytes32(input.accountAddress),
-    feltToBytes32(input.pubkeyHash),
-  ]);
-}
-
-export function buildPrivacyKeyChallengeHex(input: PrivacyKeyChallengeInput): string {
-  return bytesToHex(buildPrivacyKeyChallenge(input));
-}
-
-export function privacySignatureBytes(signature: { v: number; r: bigint; s: bigint }): Uint8Array {
-  return concatBytes([
-    Uint8Array.of(signature.v & 0xff),
-    scalarToBytes32(signature.r),
-    scalarToBytes32(signature.s),
-  ]);
-}
-
-export function derivePrivacyKeyFromSignature(
-  signatureBytes: Uint8Array,
-  challenge: Uint8Array,
-): string {
-  const digest = sha256(
-    concatBytes([signatureBytes, challenge, utf8Bytes(PRIVACY_KEY_DERIVATION_CONTEXT)]),
-  );
-  const key = (BigInt('0x' + bytesToHex(digest)) % (MAX_PRIVATE_KEY - 1n)) + 1n;
-  return '0x' + key.toString(16);
 }
 
 export function getTransactionSignatureHash(txHash: string, chainId: string): string {

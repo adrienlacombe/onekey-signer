@@ -9,8 +9,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "outDir": "dist",
-    "rootDir": "src"
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "../src/privacyKey.ts"]
 }

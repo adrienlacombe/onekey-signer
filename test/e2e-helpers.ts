@@ -704,25 +704,6 @@ export async function proveAndExecute(params: {
 }
 
 // ============================================================
-// Privacy Key Derivation
-// ============================================================
-
-export async function derivePrivacyKey(
-  privateKeyHex: string,
-  starknetAddress: string,
-  chainId?: string,
-): Promise<string> {
-  const pubHex = getUncompressedPubKey(privateKeyHex);
-  const pubkeyHash = pubkeyToPoseidonHash(pubHex);
-  const signer = new OneKeyBitcoinSigner(privateKeyHex, pubkeyHash);
-  return signer.derivePrivacyKey({
-    chainId: chainId ?? String(await getProvider().getChainId()),
-    poolAddress: PRIVACY_POOL_ADDRESS,
-    accountAddress: starknetAddress,
-  });
-}
-
-// ============================================================
 // Privacy Pool Crypto Helpers
 // ============================================================
 

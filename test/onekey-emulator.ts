@@ -19,16 +19,18 @@ import {
 } from 'starknet';
 import { ONEKEY_ACCOUNT_CLASS_HASH, PRIVACY_POOL_ADDRESS } from '../src/constants.js';
 import {
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+} from '../src/privacyKey.js';
+import {
   OneKeyBitcoinSigner,
   STARKNET_AUTH_PREFIX_HEX,
-  buildPrivacyKeyChallenge,
   calculateAccountAddress,
-  derivePrivacyKeyFromSignature,
   getOffchainSignatureHash,
   getTransactionSignatureHash,
   getUncompressedPubKey,
   normalizeOneKeySignatureComponents,
-  privacySignatureBytes,
   pubkeyToPoseidonHash,
   TX_SIGNATURE_DOMAIN_TAG,
 } from '../src/signer.js';
