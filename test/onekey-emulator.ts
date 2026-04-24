@@ -17,7 +17,12 @@ import {
   CallData,
   typedData as starknetTypedData,
 } from 'starknet';
-import { ONEKEY_ACCOUNT_CLASS_HASH } from '../src/constants.js';
+import { ONEKEY_ACCOUNT_CLASS_HASH, PRIVACY_POOL_ADDRESS } from '../src/constants.js';
+import {
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+} from '../src/privacyKey.js';
 import {
   OneKeyBitcoinSigner,
   STARKNET_AUTH_PREFIX_HEX,
@@ -25,6 +30,7 @@ import {
   getOffchainSignatureHash,
   getTransactionSignatureHash,
   getUncompressedPubKey,
+  normalizeOneKeySignatureComponents,
   pubkeyToPoseidonHash,
   TX_SIGNATURE_DOMAIN_TAG,
 } from '../src/signer.js';
@@ -32,10 +38,6 @@ import {
 const HardwareSDK = ((HardwareSDKModule as any)?.default ?? HardwareSDKModule) as any;
 
 const BOOL_TRUE_RE = /^(1|true|yes|on)$/i;
-const CURVE_ORDER = BigInt(
-  '0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
-);
-const HALF_CURVE_ORDER = CURVE_ORDER / 2n;
 
 export const ONEKEY_EMULATOR_BRIDGE_URL = 'http://localhost:21333';
 export const ONEKEY_EMULATOR_REVIEW_URL = 'http://localhost:6088';
@@ -61,6 +63,7 @@ export interface ConfiguredTestWallet {
   signer: SignerInterface;
   signHash: (messageHash: string) => Promise<string[]>;
   signTransactionHash: (messageHash: string, chainId: string) => Promise<string[]>;
+  derivePrivacyKey: (chainId: string) => Promise<string>;
 }
 
 let sdkInitialized = false;
@@ -253,14 +256,7 @@ function getCompressedPubKey(privateKeyHex: string): string {
 }
 
 function toOnChainSignature(rawSig: { v: number; r: string; s: string }): Signature {
-  let r = BigInt('0x' + normalizeHex(rawSig.r));
-  let s = BigInt('0x' + normalizeHex(rawSig.s));
-  let v = rawSig.v;
-
-  if (s > HALF_CURVE_ORDER) {
-    s = CURVE_ORDER - s;
-    v = v ^ 1;
-  }
+  const { r, s, v } = normalizeOneKeySignatureComponents(rawSig);
 
   const [rLow, rHigh] = splitU256(r);
   const [sLow, sHigh] = splitU256(s);
@@ -547,6 +543,24 @@ class OneKeyEmulatorSigner implements SignerInterface {
     ];
   }
 
+  async derivePrivacyKey(args: {
+    chainId: string;
+    poolAddress: string;
+    accountAddress: string;
+  }): Promise<string> {
+    const challenge = buildPrivacyKeyChallenge({
+      ...args,
+      pubkeyHash: this.pubkeyHash,
+    });
+    const rawSig = await signWithOneKeyEmulator(
+      bytesToHex(challenge),
+      this.accountIndex,
+      this.expectedCompressedPubKeyHex,
+    );
+    const normalized = normalizeOneKeySignatureComponents(rawSig);
+    return derivePrivacyKeyFromSignature(privacySignatureBytes(normalized), challenge);
+  }
+
   private async signRawHash(hashHex: string): Promise<Signature> {
     const hashBody = normalizeHashHex(hashHex).slice(2);
     // Match the Cairo verifier's inner payload: "STARKNET_ONEKEY_V1:" || hash_32B
@@ -583,6 +597,12 @@ export function createConfiguredTestWallet(params: {
       signHash: async (messageHash: string) => (await signer.signHash(messageHash)) as string[],
       signTransactionHash: async (messageHash: string, chainId: string) =>
         (await signer.signTransactionHash(messageHash, chainId)) as string[],
+      derivePrivacyKey: async (chainId: string) =>
+        signer.derivePrivacyKey({
+          chainId,
+          poolAddress: PRIVACY_POOL_ADDRESS,
+          accountAddress: address,
+        }),
     };
   }
 
@@ -604,5 +624,11 @@ export function createConfiguredTestWallet(params: {
     signHash: async (messageHash: string) => (await signer.signHash(messageHash)) as string[],
     signTransactionHash: async (messageHash: string, chainId: string) =>
       (await signer.signTransactionHash(messageHash, chainId)) as string[],
+    derivePrivacyKey: async (chainId: string) =>
+      signer.derivePrivacyKey({
+        chainId,
+        poolAddress: PRIVACY_POOL_ADDRESS,
+        accountAddress: address,
+      }),
   };
 }

@@ -91,7 +91,7 @@ Useful URLs:
 
 The current simulator-backed flow in the UI is:
 
-1. Connect
+1. Pick the Bitcoin account index if needed, then connect
 2. Set Viewing Key
 3. Deposit STRK
 4. Withdraw STRK
@@ -104,18 +104,22 @@ The web app has a `Private Pool Balance` card. That balance is derived from disc
 
 - `web/src/lib/onekey.ts` uses `SDK.HardwareSDKLowLevel` with `env: 'webusb'`. Do not revert to `HardwareWebSdk` / `connectSrc` — the low-level transport is what lets the app call `navigator.usb.requestDevice` with the OneKey vendor/product filter and drive the device directly.
 - `connectOneKey` authorizes the device via the browser USB chooser, then calls `searchDevices` and falls back to `getFeatures` to recover `deviceId` when the search result omits it.
+- The web UI can connect to alternate Bitcoin account indices using `m/44'/0'/0'/0/{index}`. The selected index is part of the signer state and privacy-key cache key.
 - PIN and passphrase are bound to on-device entry: the global UI event listener auto-responds with `@@ONEKEY_INPUT_PIN_IN_DEVICE` for `ui-request_pin` and `{ passphraseOnDevice: true, value: '' }` for passphrase requests. The app must never prompt for either in the UI.
 - `btcSignMessage` can return the signature as hex or base64; the `decodeSignatureBytes` helper handles both and expects exactly 65 bytes.
+- Transport framing failures such as `Didn't receive expected header signature` clear the cached `connectId`/`deviceId` and ask the user to reset the WebUSB session. Treat these as stale low-level transport state before debugging signer logic.
 
 ## Privacy Pool Integration Pitfalls
 
 - Normalize hex values before comparing addresses or token IDs. Leading-zero mismatches already caused the UI to hide valid STRK notes.
 - Do not guess channel or note indices from discovery cursors when constructing privacy-pool actions. Use the on-chain helpers in `web/src/lib/privacyPool.ts`.
 - `compile_actions` failures are usually action-construction problems, not simulator transport problems.
+- The privacy key must come from a OneKey signature over `STARKNET_ONEKEY_PRIVACY_V1:` plus chain id, pool address, account address, and `pubkey_hash`. Do not derive it from public values alone, and do not include the account class hash in the challenge; Ready-account class upgrades must not rotate the viewing key.
 - `Set Viewing Key` can legitimately fail on Sepolia if that account already has a non-zero public key registered.
 - After accepted deposits or withdrawals, discovery can lag. The UI now polls after successful transactions, but stale local state is still a common debugging angle.
 - All reads used to build a proof must be pinned to the same `proveBlock = latest - 20`. That includes `compile_actions`, `get_outgoing_channel_info`, `get_note`, and the pool nonce. `PrivacyActions.tsx` threads `proveBlock` through `compileVariants`, `getNextChannelIndex`, `getNextNoteIndex`, and `proveAndExecute` — keep that invariant if you touch either file.
-- Deposits wait for the RPC tip to advance `PROVER_FINALITY_MARGIN` (25) blocks past the approve tx before picking a `proveBlock`. Withdrawals wait until every selected note is visible at `proveBlock` via `get_note`. Both loops surface a `Waiting for the prover to catch up...` status; tune the constants at the top of `PrivacyActions.tsx` if the proving service changes its lag.
+- Setting the viewing key waits until the account class hash is visible at the pinned `proveBlock`; otherwise the prover can reject the request because `is_valid_signature` targets an account address that was undeployed at that historical block.
+- Deposits wait for the RPC tip to advance `PROVER_FINALITY_MARGIN` (25) blocks past the approve tx before picking a `proveBlock`. Withdrawals wait until every selected note is visible at `proveBlock` via `get_note`. These loops surface a `Waiting for the prover to catch up...` status; tune the constants at the top of `PrivacyActions.tsx` if the proving service changes its lag.
 
 ## Account Security Invariants
 
@@ -149,6 +153,7 @@ Every hash handed to the OneKey is wrapped with a Starknet-specific prefix *insi
 
 - The Sepolia tests use the emulator for signing, but still derive local bookkeeping keys from `ONEKEY_EMULATOR_MNEMONIC`.
 - If the device mnemonic and `ONEKEY_EMULATOR_MNEMONIC` diverge, the test flow should stop on public-key mismatch.
+- Non-emulator local fallback tests use fresh default Wallet A/B keys and legacy funded keys only as setup sponsors, so the immutable pool viewing key is not locked to the older public-derived scheme.
 - `test:setup` can fail for lack of STRK on the simulator-derived deployment account. Check account funding before debugging the signer path.
 
 ## When Updating Docs Or UX

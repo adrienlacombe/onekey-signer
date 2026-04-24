@@ -11,7 +11,7 @@ import {
 } from '../config/constants';
 import {
   computeChannelKey,
-  derivePrivacyKey,
+  deriveStarkPublicKey,
   discoverPrivatePoolState,
   formatStrk,
   generateRandom120,
@@ -35,7 +35,6 @@ interface TxRecord {
 
 interface Props {
   address: string;
-  pubkeyHash: string;
   signer: OneKeyHardwareSigner;
   account: Account;
   onRefreshBalance: () => void;
@@ -74,7 +73,7 @@ function isZeroFelt(value: string | undefined): boolean {
   return normalized.length === 0;
 }
 
-export function PrivacyActions({ address, pubkeyHash, signer, account, onRefreshBalance }: Props) {
+export function PrivacyActions({ address, signer, account, onRefreshBalance }: Props) {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [txs, setTxs] = useState<TxRecord[]>([]);
@@ -174,6 +173,32 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     [getProveContext, isNoteVisibleAtBlock],
   );
 
+  const isAccountVisibleAtBlock = useCallback(async (blockNumber: number): Promise<boolean> => {
+    try {
+      const classHash = await provider.getClassHashAt(address, blockNumber as any);
+      return !isZeroFelt(classHash);
+    } catch {
+      return false;
+    }
+  }, [address]);
+
+  const waitForAccountVisibleToProver = useCallback(async (): Promise<ProveContext> => {
+    for (let attempt = 0; attempt < PROVER_MAX_POLLS; attempt += 1) {
+      const context = await getProveContext();
+      if (await isAccountVisibleAtBlock(context.proveBlock)) {
+        return context;
+      }
+      if (attempt === 0 || attempt % 5 === 0) {
+        setStatus('Waiting for the prover to catch up to this account deployment...');
+      }
+      await new Promise((resolve) => setTimeout(resolve, PROVER_POLL_INTERVAL_MS));
+    }
+
+    throw new Error(
+      'The proving service is still behind this account deployment. Wait about a minute and try again.',
+    );
+  }, [getProveContext, isAccountVisibleAtBlock]);
+
   const getViewingKey = useCallback(async (): Promise<string> => {
     const result = await provider.callContract({
       contractAddress: PRIVACY_POOL_ADDRESS,
@@ -182,6 +207,31 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     });
     return result[0] ?? '0x0';
   }, [address]);
+
+  const getPrivacyKey = useCallback(async (): Promise<string> => {
+    const chainId = await provider.getChainId();
+    return signer.derivePrivacyKey({
+      chainId: String(chainId),
+      poolAddress: PRIVACY_POOL_ADDRESS,
+      accountAddress: address,
+    });
+  }, [address, signer]);
+
+  const assertViewingKeyMatches = useCallback(
+    (publicViewingKey: string, privacyKey: string) => {
+      const expectedPublicViewingKey = deriveStarkPublicKey(privacyKey);
+      if (BigInt(publicViewingKey) !== BigInt(expectedPublicViewingKey)) {
+        throw new Error(
+          [
+            'The on-chain viewing key for this address does not match the current OneKey-derived key.',
+            'The pool does not support rotating an already registered viewing key, so this account cannot safely use the private pool with the current device/account.',
+            `Expected ${normalizeHex(expectedPublicViewingKey)}, found ${normalizeHex(publicViewingKey)}.`,
+          ].join(' '),
+        );
+      }
+    },
+    [],
+  );
 
   const loadPrivatePoolState = useCallback(async (): Promise<{
     poolState: PrivatePoolState;
@@ -197,7 +247,8 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       throw new Error('Set the viewing key before using privacy actions.');
     }
 
-    const privacyKey = derivePrivacyKey(pubkeyHash, address);
+    const privacyKey = await getPrivacyKey();
+    assertViewingKeyMatches(publicViewingKey, privacyKey);
     const poolState = await discoverPrivatePoolState({
       address,
       apiUrl: DISCOVERY_SERVICE_URL,
@@ -207,7 +258,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     });
 
     return { poolState, privacyKey, publicViewingKey };
-  }, [address, getViewingKey, pubkeyHash]);
+  }, [address, assertViewingKeyMatches, getPrivacyKey, getViewingKey]);
 
   const fetchPrivateBalanceSnapshot = useCallback(async (): Promise<PrivateBalanceSnapshot> => {
     const publicViewingKey = await getViewingKey();
@@ -221,7 +272,8 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       throw new Error('Discovery service URL is not configured.');
     }
 
-    const privacyKey = derivePrivacyKey(pubkeyHash, address);
+    const privacyKey = await getPrivacyKey();
+    assertViewingKeyMatches(publicViewingKey, privacyKey);
     const poolState = await discoverPrivatePoolState({
       address,
       apiUrl: DISCOVERY_SERVICE_URL,
@@ -235,7 +287,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       notes: poolState.notes,
       registered,
     };
-  }, [address, getViewingKey, pubkeyHash]);
+  }, [address, assertViewingKeyMatches, getPrivacyKey, getViewingKey]);
 
   const refreshPrivateBalance = useCallback(
     async (silent: boolean = false) => {
@@ -250,7 +302,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         return snapshot;
       } catch (e: any) {
         if (!silent) {
-          setPrivateStateError(e.message?.slice(0, 240) || String(e));
+          setPrivateStateError(e.message || String(e));
         }
         return null;
       } finally {
@@ -325,15 +377,18 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
     try {
       const existingViewingKey = await getViewingKey();
       if (!isZeroFelt(existingViewingKey)) {
+        const privacyKey = await getPrivacyKey();
+        assertViewingKeyMatches(existingViewingKey, privacyKey);
         setViewingKeyRegistered(true);
         setStatus('Viewing key already set on-chain for this address.');
         void refreshPrivateBalance(true);
         return;
       }
 
-      const privacyKey = derivePrivacyKey(pubkeyHash, address);
+      setStatus('Deriving viewing key from OneKey...');
+      const privacyKey = await getPrivacyKey();
+      const { proveBlock } = await waitForAccountVisibleToProver();
       setStatus('Compiling viewing key action...');
-      const { proveBlock } = await getProveContext();
 
       const clientActions = [address, privacyKey, '1', '0', randomFelt()];
       const serverActions = await provider.callContract(
@@ -357,12 +412,12 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         setStatus('Viewing key failed (reverted)');
       }
     } catch (e: any) {
-      setError(e.message?.slice(0, 240) || String(e));
+      setError(e.message || String(e));
       setStatus('');
     } finally {
       setBusyAction(null);
     }
-  }, [address, getProveContext, getViewingKey, pubkeyHash, refreshPrivateBalance]);
+  }, [address, assertViewingKeyMatches, getPrivacyKey, getViewingKey, refreshPrivateBalance, waitForAccountVisibleToProver]);
 
   const deposit = useCallback(async () => {
     setBusyAction('deposit');
@@ -474,7 +529,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         setStatus('Deposit failed');
       }
     } catch (e: any) {
-      setError(e.message?.slice(0, 240) || String(e));
+      setError(e.message || String(e));
       setStatus('');
     } finally {
       setBusyAction(null);
@@ -590,7 +645,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         setStatus('Withdraw failed');
       }
     } catch (e: any) {
-      setError(e.message?.slice(0, 240) || String(e));
+      setError(e.message || String(e));
       setStatus('');
     } finally {
       setBusyAction(null);
@@ -676,7 +731,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       }),
     });
     const proveResult = await proveRes.json();
-    if (proveResult.error) throw new Error(`Proving: ${JSON.stringify(proveResult.error).slice(0, 300)}`);
+    if (proveResult.error) throw new Error(`Proving: ${JSON.stringify(proveResult.error)}`);
 
     const proofFacts = proveResult.result?.proof_facts || proveResult.result?.proofFacts || [];
     const proof = proveResult.result?.proof || '';
@@ -759,7 +814,7 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
       }),
     });
     const submitData = await submitRes.json();
-    if (submitData.error) throw new Error(`Submit: ${JSON.stringify(submitData.error).slice(0, 300)}`);
+    if (submitData.error) throw new Error(`Submit: ${JSON.stringify(submitData.error)}`);
     return submitData.result.transaction_hash;
   }
 
@@ -771,8 +826,23 @@ export function PrivacyActions({ address, pubkeyHash, signer, account, onRefresh
         </div>
       )}
       {error && (
-        <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-200">
-          {error}
+        <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-red-200 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs uppercase tracking-wide text-red-300/80">Error</span>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(error);
+              }}
+              className="text-xs text-red-300 hover:text-red-100 underline underline-offset-2"
+              title="Copy full error to clipboard"
+            >
+              Copy
+            </button>
+          </div>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all max-h-96 overflow-auto">
+            {error}
+          </pre>
         </div>
       )}
 

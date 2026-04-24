@@ -44,6 +44,21 @@ import {
   typedData as starknetTypedData,
 } from 'starknet';
 import { ScriptType } from './constants.js';
+import {
+  PRIVACY_KEY_DOMAIN,
+  type PrivacyKeyChallengeInput,
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+} from './privacyKey.js';
+
+export {
+  PRIVACY_KEY_DOMAIN,
+  type PrivacyKeyChallengeInput,
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+};
 
 // ── secp256k1 curve constants ─────────────────────────────────────
 
@@ -83,6 +98,9 @@ export const STARKNET_AUTH_PREFIX_HEX = '535441524b4e45545f4f4e454b45595f56313a'
 
 function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex;
+  if (!/^[0-9a-f]*$/i.test(h)) {
+    throw new Error(`Invalid hex string: ${hex}`);
+  }
   const padded = h.length % 2 === 0 ? h : '0' + h;
   const bytes = new Uint8Array(padded.length / 2);
   for (let i = 0; i < bytes.length; i++) {
@@ -97,6 +115,35 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function encodeBitcoinVarint(value: number): Uint8Array {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid Bitcoin varint length: ${value}`);
+  }
+  if (value < 0xfd) return Uint8Array.of(value);
+  if (value <= 0xffff) return Uint8Array.of(0xfd, value & 0xff, (value >> 8) & 0xff);
+  if (value <= 0xffffffff) {
+    return Uint8Array.of(
+      0xfe,
+      value & 0xff,
+      (value >> 8) & 0xff,
+      (value >> 16) & 0xff,
+      (value >> 24) & 0xff,
+    );
+  }
+  throw new Error(`Bitcoin message is too large: ${value} bytes.`);
+}
+
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
   return ['0x' + (value & mask).toString(16), '0x' + (value >> 128n).toString(16)];
@@ -104,6 +151,32 @@ function splitU256(value: bigint): [string, string] {
 
 function normalizeHashHex(hashHex: string): `0x${string}` {
   return ('0x' + hashHex.replace(/^0x/i, '').padStart(64, '0')) as `0x${string}`;
+}
+
+function normalizeSignatureScalar(value: string | bigint, label: 'r' | 's'): bigint {
+  if (typeof value === 'bigint') return value;
+  const clean = value.replace(/^0x/i, '').toLowerCase();
+  if (!clean || !/^[0-9a-f]+$/.test(clean)) {
+    throw new Error(`OneKey returned an invalid ${label} value while signing.`);
+  }
+  return BigInt('0x' + clean);
+}
+
+export function normalizeOneKeySignatureComponents(rawSig: {
+  v: number;
+  r: string | bigint;
+  s: string | bigint;
+}): { v: number; r: bigint; s: bigint } {
+  const r = normalizeSignatureScalar(rawSig.r, 'r');
+  let s = normalizeSignatureScalar(rawSig.s, 's');
+  let v = rawSig.v;
+
+  if (s > HALF_CURVE_ORDER) {
+    s = CURVE_ORDER - s;
+    v = v ^ 1;
+  }
+
+  return { v, r, s };
 }
 
 export function getTransactionSignatureHash(txHash: string, chainId: string): string {
@@ -164,13 +237,11 @@ function normalizeSecpPublicKeyHex(publicKeyHex: string): string {
  * ))
  */
 export function bitcoinMessageDigest(hash32: Uint8Array): Uint8Array {
-  const innerLen = STARKNET_AUTH_PREFIX.length + 32; // 51
-  const msg = new Uint8Array(BITCOIN_MSG_PREFIX.length + 1 + innerLen);
-  msg.set(BITCOIN_MSG_PREFIX, 0);
-  msg[BITCOIN_MSG_PREFIX.length] = innerLen; // varint(51) = 0x33
-  msg.set(STARKNET_AUTH_PREFIX, BITCOIN_MSG_PREFIX.length + 1);
-  msg.set(hash32, BITCOIN_MSG_PREFIX.length + 1 + STARKNET_AUTH_PREFIX.length);
-  return sha256(sha256(msg));
+  return bitcoinMessagePayloadDigest(concatBytes([STARKNET_AUTH_PREFIX, hash32]));
+}
+
+export function bitcoinMessagePayloadDigest(message: Uint8Array): Uint8Array {
+  return sha256(sha256(concatBytes([BITCOIN_MSG_PREFIX, encodeBitcoinVarint(message.length), message])));
 }
 
 // ── OneKey compact signature ──────────────────────────────────────
@@ -203,6 +274,23 @@ export async function signBitcoinMessage(
 ): Promise<OnekeyCompactSignature> {
   const hashBytes = hexToBytes(hash32Hex.padStart(64, '0'));
   const digest = bitcoinMessageDigest(hashBytes);
+  return signBitcoinMessageDigest(privateKeyHex, digest, scriptType);
+}
+
+async function signBitcoinPayloadMessage(
+  privateKeyHex: string,
+  message: Uint8Array,
+  scriptType: ScriptType = ScriptType.NATIVE_SEGWIT,
+): Promise<OnekeyCompactSignature> {
+  const digest = bitcoinMessagePayloadDigest(message);
+  return signBitcoinMessageDigest(privateKeyHex, digest, scriptType);
+}
+
+async function signBitcoinMessageDigest(
+  privateKeyHex: string,
+  digest: Uint8Array,
+  scriptType: ScriptType,
+): Promise<OnekeyCompactSignature> {
   const digestHex = ('0x' + bytesToHex(digest)) as `0x${string}`;
 
   // Sign using viem (raw ECDSA, no Ethereum prefix) — returns 0x + r[64] + s[64] + v[2]
@@ -438,6 +526,22 @@ export class OneKeyBitcoinSigner implements SignerInterface {
   async signTransactionHash(txHash: string, chainId: string): Promise<Signature> {
     return withTransactionSignatureMarker(
       await this.signRawHash(getTransactionSignatureHash(txHash, chainId)),
+    );
+  }
+
+  async derivePrivacyKey(args: {
+    chainId: string;
+    poolAddress: string;
+    accountAddress: string;
+  }): Promise<string> {
+    const challenge = buildPrivacyKeyChallenge({
+      ...args,
+      pubkeyHash: this.pubkeyHash,
+    });
+    const sig = await signBitcoinPayloadMessage(this.privateKeyHex, challenge, this.scriptType);
+    return derivePrivacyKeyFromSignature(
+      privacySignatureBytes({ v: sig.yParity, r: sig.r, s: sig.s }),
+      challenge,
     );
   }
 

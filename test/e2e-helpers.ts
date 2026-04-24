@@ -31,10 +31,10 @@ import {
   AVNU_PAYMASTER_URL,
   AVNU_API_KEY,
   PROVING_SERVICE_URL,
-  EC_ORDER,
-  MAX_PRIVATE_KEY,
   ScriptType,
 } from '../src/constants.js';
+
+const PROOF_APPLY_L2_GAS_MAX = 0x8000000n;
 
 // ============================================================
 // Provider
@@ -609,11 +609,11 @@ export async function proveAndExecute(params: {
     .map(toHexStr);
 
   const onchainRb = {
-    l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price * 2n },
-    l2_gas: { max_amount: 0x8000000n, max_price_per_unit: l2Price * 2n },
+    l1_gas: { max_amount: 0x200n, max_price_per_unit: l1Price },
+    l2_gas: { max_amount: PROOF_APPLY_L2_GAS_MAX, max_price_per_unit: l2Price },
     l1_data_gas: {
       max_amount: 0x800n,
-      max_price_per_unit: l1DataPrice * 2n,
+      max_price_per_unit: l1DataPrice,
     },
   };
 
@@ -701,25 +701,6 @@ export async function proveAndExecute(params: {
   }
 
   return submitData.result.transaction_hash;
-}
-
-// ============================================================
-// Privacy Key Derivation
-// ============================================================
-
-export function derivePrivacyKey(
-  privateKeyHex: string,
-  starknetAddress: string,
-): string {
-  // Deterministic: poseidon of the secp256k1 pubkey hash + address
-  const pubHex = getUncompressedPubKey(privateKeyHex);
-  const pubkeyHash = pubkeyToPoseidonHash(pubHex);
-  const raw = ec.starkCurve.poseidonHashMany([
-    BigInt(pubkeyHash),
-    BigInt(starknetAddress),
-  ]);
-  const key = (BigInt('0x' + raw.toString(16)) % (MAX_PRIVATE_KEY - 1n)) + 1n;
-  return '0x' + key.toString(16);
 }
 
 // ============================================================

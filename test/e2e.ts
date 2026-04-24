@@ -24,7 +24,6 @@ import {
   isDeployed,
   getStrkBalance,
   waitForTx,
-  derivePrivacyKey,
   signAndExecuteInvoke,
   directInvoke,
   proveAndExecute,
@@ -54,15 +53,25 @@ import {
 } from './onekey-emulator.js';
 
 // ============================================================
-// Default local test private keys — used when ONEKEY_EMULATOR is not enabled
+// Default local test private keys — used when ONEKEY_EMULATOR is not enabled.
+// The legacy keys are already deployed/funded on Sepolia and bootstrap these
+// fresh accounts so their viewing keys are not locked to the old public-derived
+// privacy-key scheme.
 // ============================================================
-const DEFAULT_TEST_PRIVATE_KEY_A =
+const LEGACY_LOCAL_SPONSOR_PRIVATE_KEY_A =
   'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
-const DEFAULT_TEST_PRIVATE_KEY_B =
+const LEGACY_LOCAL_SPONSOR_PRIVATE_KEY_B =
   '59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+const DEFAULT_TEST_PRIVATE_KEY_A =
+  'efb7d7eaca7cc57baf3f5007422a0ec94ff1ac4cb06aba447e9171be351fb5c2';
+const DEFAULT_TEST_PRIVATE_KEY_B =
+  '2ecfd777cb0146499141872c043979a592cdf6747402d5f52da41747b64252c6';
+const SPONSOR_FUND_AMOUNT = 1000000000000000000n; // 1 STRK
 
 let walletA: ConfiguredTestWallet | undefined;
 let walletB: ConfiguredTestWallet | undefined;
+let legacySponsorA: ConfiguredTestWallet | undefined;
+let legacySponsorB: ConfiguredTestWallet | undefined;
 
 function getWallets(): { walletA: ConfiguredTestWallet; walletB: ConfiguredTestWallet } {
   if (!walletA || !walletB) {
@@ -79,6 +88,28 @@ function getWallets(): { walletA: ConfiguredTestWallet; walletB: ConfiguredTestW
   }
 
   return { walletA, walletB };
+}
+
+function getLegacyLocalSponsors(): {
+  legacySponsorA: ConfiguredTestWallet;
+  legacySponsorB: ConfiguredTestWallet;
+} | null {
+  if (isOneKeyEmulatorEnabled()) return null;
+
+  if (!legacySponsorA || !legacySponsorB) {
+    legacySponsorA = createConfiguredTestWallet({
+      label: 'Legacy Sponsor A',
+      fallbackPrivateKeyHex: LEGACY_LOCAL_SPONSOR_PRIVATE_KEY_A,
+      emulatorSlot: 'A',
+    });
+    legacySponsorB = createConfiguredTestWallet({
+      label: 'Legacy Sponsor B',
+      fallbackPrivateKeyHex: LEGACY_LOCAL_SPONSOR_PRIVATE_KEY_B,
+      emulatorSlot: 'B',
+    });
+  }
+
+  return { legacySponsorA, legacySponsorB };
 }
 
 // ============================================================
@@ -182,7 +213,6 @@ async function deployAccount(
     } else if (sponsor) {
       // Fund from sponsor, then deploy
       console.log('  Deploying via sponsor...');
-      const fundAmount = 2000000000000000000n; // 2 STRK
       const fundTx = await directInvoke({
         privateKeyHex: sponsor.privateKeyHex,
         starknetAddress: sponsor.address,
@@ -192,7 +222,7 @@ async function deployAccount(
           {
             contractAddress: STRK_TOKEN_ADDRESS,
             entrypoint: 'transfer',
-            calldata: [address, fundAmount.toString(), '0'],
+            calldata: [address, SPONSOR_FUND_AMOUNT.toString(), '0'],
           },
         ],
       });
@@ -223,14 +253,15 @@ async function deployAccount(
 async function setup() {
   console.log('\n=== STEP 1: Setup ===\n');
   const { walletA, walletB } = getWallets();
+  const legacySponsors = getLegacyLocalSponsors();
 
   assert(
     ONEKEY_ACCOUNT_CLASS_HASH !== '0x0000000000000000000000000000000000000000000000000000000000000000',
     'ONEKEY_ACCOUNT_CLASS_HASH not set — declare the contract first',
   );
 
-  const a = await deployAccount('Wallet A', walletA);
-  const b = await deployAccount('Wallet B', walletB, walletA);
+  const a = await deployAccount('Wallet A', walletA, legacySponsors?.legacySponsorA);
+  const b = await deployAccount('Wallet B', walletB, legacySponsors?.legacySponsorB ?? walletA);
 
   if (a.balance === 0n) {
     console.log(
@@ -263,10 +294,11 @@ async function deposit() {
   console.log('Balance:', formatStrk(balance));
   assert(balance > 0n, 'Account has no STRK balance — fund it first');
 
-  const privacyKey = derivePrivacyKey(walletA.privateKeyHex, address);
+  const provider = getProvider();
+  const chainId = await provider.getChainId();
+  const privacyKey = await walletA.derivePrivacyKey(String(chainId));
   console.log('Privacy key:', privacyKey);
 
-  const provider = getProvider();
   const randomFelt = () => {
     const bytes = new Uint8Array(31);
     crypto.getRandomValues(bytes);
@@ -329,6 +361,10 @@ async function deposit() {
   assert(
     pubKeyCheck[0] !== '0x0' && pubKeyCheck[0] !== '0',
     'Viewing key not set after registration',
+  );
+  assert(
+    BigInt(pubKeyCheck[0]) === BigInt(deriveStarkPublicKey(privacyKey)),
+    'On-chain viewing key does not match the OneKey-derived privacy key',
   );
   console.log('  On-chain viewing key:', pubKeyCheck[0].slice(0, 16) + '...');
 
@@ -509,12 +545,13 @@ async function transfer() {
   const { walletA, walletB } = getWallets();
 
   const provider = getProvider();
+  const chainId = await provider.getChainId();
 
   const { address: addrA, pubkeyHash: hashA } = walletA;
-  const privacyKeyA = derivePrivacyKey(walletA.privateKeyHex, addrA);
+  const privacyKeyA = await walletA.derivePrivacyKey(String(chainId));
 
   const { address: addrB, pubkeyHash: hashB } = walletB;
-  const privacyKeyB = derivePrivacyKey(walletB.privateKeyHex, addrB);
+  const privacyKeyB = await walletB.derivePrivacyKey(String(chainId));
 
   console.log('Wallet A:', addrA);
   console.log('Wallet B:', addrB);
@@ -596,6 +633,10 @@ async function transfer() {
     calldata: [addrB],
   });
   const bStarkPubKey = bPubKeyResult[0];
+  assert(
+    BigInt(bStarkPubKey) === BigInt(deriveStarkPublicKey(privacyKeyB)),
+    "Wallet B's on-chain viewing key does not match the OneKey-derived privacy key",
+  );
 
   const channelKey = computeChannelKey(addrA, privacyKeyA, addrB, bStarkPubKey);
 
@@ -682,8 +723,9 @@ async function withdraw() {
   const balanceBefore = await getStrkBalance(address);
   console.log('Balance before:', formatStrk(balanceBefore));
 
-  const privacyKey = derivePrivacyKey(walletA.privateKeyHex, address);
   const provider = getProvider();
+  const chainId = await provider.getChainId();
+  const privacyKey = await walletA.derivePrivacyKey(String(chainId));
   const randomFelt = () => {
     const bytes = new Uint8Array(31);
     crypto.getRandomValues(bytes);

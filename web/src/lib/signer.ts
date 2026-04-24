@@ -21,6 +21,14 @@ import {
 } from 'starknet';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { signWithOneKey } from './onekey';
+import {
+  PRIVACY_KEY_DOMAIN,
+  buildPrivacyKeyChallenge,
+  derivePrivacyKeyFromSignature,
+  privacySignatureBytes,
+} from '../../../src/privacyKey.js';
+
+export { PRIVACY_KEY_DOMAIN, buildPrivacyKeyChallenge };
 
 const CURVE_ORDER = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
 const HALF_CURVE_ORDER = CURVE_ORDER / 2n;
@@ -40,6 +48,12 @@ export const STARKNET_AUTH_PREFIX_HEX = '535441524b4e45545f4f4e454b45595f56313a'
 function splitU256(value: bigint): [string, string] {
   const mask = (1n << 128n) - 1n;
   return ['0x' + (value & mask).toString(16), '0x' + (value >> 128n).toString(16)];
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function normalizeHashHex(hashHex: string): `0x${string}` {
@@ -101,6 +115,23 @@ function normalizeScalarHex(value: string, label: 'r' | 's'): string {
   return clean;
 }
 
+function normalizeOneKeySignature(rawSig: { v: number; r: string; s: string }): {
+  v: number;
+  r: bigint;
+  s: bigint;
+} {
+  const r = BigInt('0x' + normalizeScalarHex(rawSig.r, 'r'));
+  let s = BigInt('0x' + normalizeScalarHex(rawSig.s, 's'));
+  let v = rawSig.v;
+
+  if (s > HALF_CURVE_ORDER) {
+    s = CURVE_ORDER - s;
+    v = v ^ 1;
+  }
+
+  return { v, r, s };
+}
+
 /**
  * Compute Poseidon pubkey_hash from uncompressed secp256k1 public key hex.
  */
@@ -129,7 +160,8 @@ export function calculateAccountAddress(pubkeyHash: string, classHash: string): 
 
 export class OneKeyHardwareSigner implements SignerInterface {
   public readonly pubkeyHash: string;
-  private accountIndex: number;
+  private readonly accountIndex: number;
+  private readonly privacyKeyCache = new Map<string, Promise<string>>();
 
   constructor(pubkeyHash: string, accountIndex: number = 0) {
     this.pubkeyHash = pubkeyHash;
@@ -211,22 +243,50 @@ export class OneKeyHardwareSigner implements SignerInterface {
     );
   }
 
+  async derivePrivacyKey(args: {
+    chainId: string;
+    poolAddress: string;
+    accountAddress: string;
+  }): Promise<string> {
+    const cacheKey = [
+      String(args.chainId),
+      args.poolAddress.toLowerCase(),
+      args.accountAddress.toLowerCase(),
+      this.pubkeyHash.toLowerCase(),
+      this.accountIndex,
+    ].join(':');
+    const cached = this.privacyKeyCache.get(cacheKey);
+    if (cached) return cached;
+
+    const promise = this.derivePrivacyKeyUncached(args).catch((error) => {
+      this.privacyKeyCache.delete(cacheKey);
+      throw error;
+    });
+    this.privacyKeyCache.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async derivePrivacyKeyUncached(args: {
+    chainId: string;
+    poolAddress: string;
+    accountAddress: string;
+  }): Promise<string> {
+    const challenge = buildPrivacyKeyChallenge({
+      ...args,
+      pubkeyHash: this.pubkeyHash,
+    });
+    const rawSig = await signWithOneKey(bytesToHex(challenge), this.accountIndex);
+    const normalized = normalizeOneKeySignature(rawSig);
+    return derivePrivacyKeyFromSignature(privacySignatureBytes(normalized), challenge);
+  }
+
   private async signRawHash(hashHex: string): Promise<Signature> {
     const hashBody = normalizeHashHex(hashHex).slice(2);
     // The device wraps these bytes as `varint(len) || "Bitcoin Signed Message:\n" || …`
     // — prepending the Starknet prefix domain-separates the produced signature.
     const messageHex = STARKNET_AUTH_PREFIX_HEX + hashBody;
     const rawSig = await signWithOneKey(messageHex, this.accountIndex);
-
-    let r = BigInt('0x' + normalizeScalarHex(rawSig.r, 'r'));
-    let s = BigInt('0x' + normalizeScalarHex(rawSig.s, 's'));
-    let v = rawSig.v;
-
-    // Low-s normalization
-    if (s > HALF_CURVE_ORDER) {
-      s = CURVE_ORDER - s;
-      v = v ^ 1;
-    }
+    const { r, s, v } = normalizeOneKeySignature(rawSig);
 
     const [rLow, rHigh] = splitU256(r);
     const [sLow, sHigh] = splitU256(s);

@@ -1,7 +1,5 @@
 import { ec, type RpcProvider } from 'starknet';
 
-const EC_ORDER = 0x0800000000000010ffffffffffffffffb781126dcae7b2321e66a241adc64d2fn;
-const MAX_PRIVATE_KEY = EC_ORDER / 2n - 1n;
 const STRK_DECIMALS = 10n ** 18n;
 type PoolBlockIdentifier = Parameters<RpcProvider['callContract']>[1];
 
@@ -111,6 +109,25 @@ export function normalizeHex(value: string | bigint | number): string {
   return '0x' + BigInt(value).toString(16);
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.replace(/^0x/i, '');
+  if (!/^[0-9a-f]*$/i.test(clean)) {
+    throw new Error(`Invalid hex string: ${hex}`);
+  }
+  const padded = clean.length % 2 === 0 ? clean : '0' + clean;
+  const bytes = new Uint8Array(padded.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) {
+    bytes[i] = parseInt(padded.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 function isCursorComplete(cursor: ApiDiscoveryCursor | undefined): boolean {
   if (!cursor?.channel_discovery_complete) return false;
   if (!cursor.channels) return true;
@@ -172,10 +189,10 @@ export function formatStrk(wei: bigint, precision: number = 6): string {
   return `${whole}.${fraction}`;
 }
 
-export function derivePrivacyKey(pubkeyHash: string, address: string): string {
-  const raw = ec.starkCurve.poseidonHashMany([BigInt(pubkeyHash), BigInt(address)]);
-  const key = (BigInt('0x' + raw.toString(16)) % (MAX_PRIVATE_KEY - 1n)) + 1n;
-  return normalizeHex(key);
+export function deriveStarkPublicKey(privacyKey: string): string {
+  const keyBytes = hexToBytes(normalizeHex(privacyKey).slice(2).padStart(64, '0'));
+  const publicKeyBytes = ec.starkCurve.getPublicKey(keyBytes);
+  return normalizeHex('0x' + bytesToHex(publicKeyBytes.slice(1, 33)));
 }
 
 export function computeChannelKey(

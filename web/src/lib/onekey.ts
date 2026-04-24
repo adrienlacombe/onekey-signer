@@ -31,6 +31,45 @@ let sdkEventsBound = false;
 let currentConnectId: string | null = null;
 let currentDeviceId: string | null = null;
 
+function sdkPayloadError(payload: unknown): string {
+  if (!payload) return '';
+  if (typeof payload === 'string') return payload;
+  if (typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    const error = record.error ?? record.message;
+    if (typeof error === 'string') return error;
+    if (error) return String(error);
+  }
+  return String(payload);
+}
+
+function isTransportFramingError(message: string): boolean {
+  return /expected header signature|initialize failed/i.test(message);
+}
+
+function resetCurrentDevice(): void {
+  if (currentConnectId) {
+    try {
+      HardwareSDK.cancel(currentConnectId);
+    } catch {
+      // Best-effort cleanup; the next connect will rebuild the device handle.
+    }
+  }
+  currentConnectId = null;
+  currentDeviceId = null;
+}
+
+function oneKeyOperationError(operation: string, payload: unknown): Error {
+  const message = sdkPayloadError(payload) || 'unknown';
+  if (isTransportFramingError(message)) {
+    resetCurrentDevice();
+    return new Error(
+      `${operation} failed: ${message}. Reset the WebUSB session by closing other OneKey tabs/apps, unplugging and reconnecting the device, unlocking it, opening the Bitcoin app, then clicking Connect again.`,
+    );
+  }
+  return new Error(`${operation} failed: ${message}`);
+}
+
 function decodeSignatureBytes(signature: string): Uint8Array {
   const trimmed = signature.trim();
   const hex = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
@@ -161,7 +200,7 @@ async function discoverAuthorizedDevice(): Promise<{
 }> {
   const searchResult = await HardwareSDK.searchDevices();
   if (!searchResult.success) {
-    throw new Error((searchResult.payload as any)?.error || 'OneKey device search failed.');
+    throw oneKeyOperationError('OneKey device search', searchResult.payload);
   }
 
   const device = searchResult.payload?.[0];
@@ -175,7 +214,7 @@ async function discoverAuthorizedDevice(): Promise<{
 
   const features = await HardwareSDK.getFeatures(device.connectId);
   if (!features.success) {
-    throw new Error((features.payload as any)?.error || 'Failed to query OneKey device features.');
+    throw oneKeyOperationError('getFeatures', features.payload);
   }
 
   return setCurrentDevice({
@@ -229,7 +268,7 @@ export async function getBtcPublicKey(accountIndex: number = 0): Promise<{
     coin: 'btc',
   });
   if (!result.success) {
-    throw new Error(`btcGetPublicKey failed: ${(result.payload as any)?.error || 'unknown'}`);
+    throw oneKeyOperationError('btcGetPublicKey', result.payload);
   }
   const payload = result.payload as any;
   return { publicKey: payload.node?.public_key || payload.publicKey || '' };
@@ -260,7 +299,7 @@ export async function signWithOneKey(
     coin: 'btc',
   });
   if (!result.success) {
-    throw new Error(`btcSignMessage failed: ${(result.payload as any)?.error || 'unknown'}`);
+    throw oneKeyOperationError('btcSignMessage', result.payload);
   }
   const payload = result.payload as any;
   const sigBytes = decodeSignatureBytes(String(payload.signature || ''));

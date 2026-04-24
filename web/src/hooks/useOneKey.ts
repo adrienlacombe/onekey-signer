@@ -20,6 +20,7 @@ export type Phase = 'connect' | 'deploy' | 'fund' | 'interact';
 export interface OneKeyState {
   phase: Phase;
   connected: boolean;
+  accountIndex: number;
   publicKey: string;
   pubkeyHash: string;
   starknetAddress: string;
@@ -44,6 +45,7 @@ export function useOneKey() {
   const [state, setState] = useState<OneKeyState>({
     phase: 'connect',
     connected: false,
+    accountIndex: 0,
     publicKey: '',
     pubkeyHash: '',
     starknetAddress: '',
@@ -96,6 +98,7 @@ export function useOneKey() {
       setState({
         phase,
         connected: true,
+        accountIndex,
         publicKey,
         pubkeyHash,
         starknetAddress: address,
@@ -205,6 +208,7 @@ export function useOneKey() {
     setState({
       phase: 'connect',
       connected: false,
+      accountIndex: 0,
       publicKey: '',
       pubkeyHash: '',
       starknetAddress: '',
