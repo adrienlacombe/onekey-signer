@@ -177,8 +177,17 @@ export function PrivacyActions({ address, signer, account, onRefreshBalance }: P
     try {
       const classHash = await provider.getClassHashAt(address, blockNumber as any);
       return !isZeroFelt(classHash);
-    } catch {
-      return false;
+    } catch (err: any) {
+      // CONTRACT_NOT_FOUND (RPC code 20) is the expected "not deployed at this
+      // block yet" signal — keep polling. Anything else (timeout, 5xx, bad
+      // block, invalid params) is a real failure that should surface fast
+      // instead of burning the full poll budget silently.
+      const code = err?.baseError?.code ?? err?.code;
+      const message = typeof err?.message === 'string' ? err.message : '';
+      if (code === 20 || /contract\s*not\s*found/i.test(message)) {
+        return false;
+      }
+      throw err;
     }
   }, [address]);
 
