@@ -171,7 +171,7 @@ The demo UI supports both a physical OneKey and the local simulator.
 
 Current simulator UI flow:
 
-1. Connect to the device
+1. Pick the Bitcoin account index if needed, then connect to the device
 2. Set the viewing key once
 3. Deposit STRK into the privacy pool
 4. Withdraw STRK from the privacy pool
@@ -181,9 +181,10 @@ The UI also shows a `Private Pool Balance` card.
 Physical device flow notes:
 
 - Connecting triggers a browser WebUSB chooser. Approve the OneKey entry once; Chrome/Edge will remember it for the origin.
+- The account index selector maps to `m/44'/0'/0'/0/{index}`. Changing it changes the OneKey public key, Starknet account address, and privacy viewing key.
 - PIN and passphrase are always entered on the device itself. The web app does not prompt for either.
 - The privacy viewing key is derived from a OneKey signature over `STARKNET_ONEKEY_PRIVACY_V1:` plus the chain id, pool address, account address, and account `pubkey_hash`. It is not derived from public account data alone, and the challenge intentionally excludes the account class hash so Ready-account class upgrades do not rotate the viewing key.
-- Deposits and withdrawals pause with a `Waiting for the prover to catch up...` status while the proving service reaches the pinned block (latest − 20, with an extra ~25-block finality margin after an approval). This is expected and usually clears within a minute.
+- Setting the viewing key, deposits, and withdrawals may pause with a `Waiting for the prover to catch up...` status while the proving service reaches the pinned block (latest - 20, with an extra ~25-block finality margin after an approval). This is expected and usually clears within a minute.
 
 Notes about balance and discovery:
 
@@ -198,6 +199,7 @@ Notes about balance and discovery:
 - If the simulator transport reports timeouts or empty output, restart the web dev server and reopen the noVNC tab before assuming the bridge is broken.
 - `WebUSB requires Chrome or Edge on desktop.` means the current browser has no `navigator.usb`. Switch browsers; Safari and Firefox are not supported.
 - If the USB chooser closes with no device listed, unlock the OneKey and open the Bitcoin app before retrying. The SDK only enumerates devices in app mode.
+- `Didn't receive expected header signature` means the low-level WebUSB frame was out of sync. Close other OneKey tabs/apps, unplug and reconnect the device, unlock it, open the Bitcoin app, then click Connect again.
 - A long `Waiting for the prover to catch up...` message after a deposit/withdraw means the RPC tip has not yet reached the block the proof was pinned to. Wait for it to clear rather than retrying immediately.
 
 ## Notes
