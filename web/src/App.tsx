@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Header } from './components/layout/Header';
 import { FundingPanel } from './components/FundingPanel';
 import { PrivacyActions } from './components/PrivacyActions';
@@ -18,6 +19,14 @@ function formatStrk(wei: bigint): string {
 
 export default function App() {
   const { state, connect, deploy, refreshBalance, disconnect } = useOneKey();
+  const [accountIndexInput, setAccountIndexInput] = useState('0');
+  const accountIndexValid = /^\d+$/.test(accountIndexInput);
+  const selectedAccountIndex = accountIndexValid ? Number(accountIndexInput) : 0;
+
+  const connectSelectedAccount = () => {
+    if (!accountIndexValid || !Number.isSafeInteger(selectedAccountIndex)) return;
+    void connect(selectedAccountIndex);
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -25,7 +34,7 @@ export default function App() {
         connected={state.connected}
         address={state.starknetAddress}
         simulatorMode={ONEKEY_SIMULATOR_ENABLED}
-        onConnect={() => connect(0)}
+        onConnect={connectSelectedAccount}
         onDisconnect={disconnect}
       />
 
@@ -72,9 +81,48 @@ export default function App() {
                 </>
               )}
             </p>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6 text-left">
+              <label className="text-xs text-gray-500 block mb-2" htmlFor="account-index">
+                Bitcoin account index
+              </label>
+              <div className="grid grid-cols-[44px_1fr_44px] gap-2">
+                <button
+                  type="button"
+                  aria-label="Decrease account index"
+                  onClick={() => setAccountIndexInput(String(Math.max(selectedAccountIndex - 1, 0)))}
+                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-lg leading-none"
+                >
+                  -
+                </button>
+                <input
+                  id="account-index"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={accountIndexInput}
+                  onChange={(event) => setAccountIndexInput(event.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-full font-mono text-center"
+                />
+                <button
+                  type="button"
+                  aria-label="Increase account index"
+                  onClick={() => setAccountIndexInput(String(selectedAccountIndex + 1))}
+                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-lg leading-none"
+                >
+                  +
+                </button>
+              </div>
+              <div className="text-xs text-gray-500 font-mono mt-2">
+                m/44'/0'/0'/0/{accountIndexValid ? selectedAccountIndex : '?'}
+              </div>
+              {!accountIndexValid && (
+                <div className="text-xs text-red-300 mt-2">Enter a non-negative integer.</div>
+              )}
+            </div>
             <button
-              onClick={() => connect(0)}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl text-lg font-medium"
+              onClick={connectSelectedAccount}
+              disabled={!accountIndexValid || !Number.isSafeInteger(selectedAccountIndex)}
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-3 rounded-xl text-lg font-medium"
             >
               {ONEKEY_SIMULATOR_ENABLED ? 'Connect OneKey Simulator' : 'Connect OneKey Bitcoin'}
             </button>
@@ -97,6 +145,9 @@ export default function App() {
             </div>
             <div className="text-sm text-gray-400 mb-4">
               Balance: <span className="font-mono">{formatStrk(state.balance)} STRK</span>
+            </div>
+            <div className="text-sm text-gray-400 mb-4">
+              Account index: <span className="font-mono">{state.accountIndex}</span>
             </div>
             {state.balance === 0n && (
               <p className="text-sm text-amber-400 mb-4">
@@ -139,6 +190,9 @@ export default function App() {
                 <span>
                   Balance: <span className="font-mono text-green-400">{formatStrk(state.balance)} STRK</span>
                 </span>
+                <span>
+                  Account index: <span className="font-mono text-gray-300">{state.accountIndex}</span>
+                </span>
                 <button onClick={refreshBalance} className="text-indigo-400 hover:text-indigo-300 text-xs">
                   Refresh
                 </button>
@@ -146,7 +200,6 @@ export default function App() {
             </div>
             <PrivacyActions
               address={state.starknetAddress}
-              pubkeyHash={state.pubkeyHash}
               signer={state.signer}
               account={state.account}
               onRefreshBalance={refreshBalance}

@@ -182,6 +182,7 @@ Physical device flow notes:
 
 - Connecting triggers a browser WebUSB chooser. Approve the OneKey entry once; Chrome/Edge will remember it for the origin.
 - PIN and passphrase are always entered on the device itself. The web app does not prompt for either.
+- The privacy viewing key is derived from a OneKey signature over `STARKNET_ONEKEY_PRIVACY_V1:` plus the chain id, pool address, account address, and account `pubkey_hash`. It is not derived from public account data alone, and the challenge intentionally excludes the account class hash so Ready-account class upgrades do not rotate the viewing key.
 - Deposits and withdrawals pause with a `Waiting for the prover to catch up...` status while the proving service reaches the pinned block (latest − 20, with an extra ~25-block finality margin after an approval). This is expected and usually clears within a minute.
 
 Notes about balance and discovery:
@@ -193,7 +194,7 @@ Notes about balance and discovery:
 ## Troubleshooting
 
 - `compile_actions` reverts are privacy-pool action construction failures, not simulator transport failures.
-- If `Set Viewing Key` fails for an already initialized account, check whether the account already has a viewing key on Sepolia.
+- If `Set Viewing Key` fails for an already initialized account, check whether the account already has a viewing key on Sepolia. Existing accounts whose registered key was derived by an older build cannot be migrated because the pool public key is immutable.
 - If the simulator transport reports timeouts or empty output, restart the web dev server and reopen the noVNC tab before assuming the bridge is broken.
 - `WebUSB requires Chrome or Edge on desktop.` means the current browser has no `navigator.usb`. Switch browsers; Safari and Firefox are not supported.
 - If the USB chooser closes with no device listed, unlock the OneKey and open the Bitcoin app before retrying. The SDK only enumerates devices in app mode.

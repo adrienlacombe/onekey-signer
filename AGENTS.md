@@ -112,6 +112,7 @@ The web app has a `Private Pool Balance` card. That balance is derived from disc
 - Normalize hex values before comparing addresses or token IDs. Leading-zero mismatches already caused the UI to hide valid STRK notes.
 - Do not guess channel or note indices from discovery cursors when constructing privacy-pool actions. Use the on-chain helpers in `web/src/lib/privacyPool.ts`.
 - `compile_actions` failures are usually action-construction problems, not simulator transport problems.
+- The privacy key must come from a OneKey signature over `STARKNET_ONEKEY_PRIVACY_V1:` plus chain id, pool address, account address, and `pubkey_hash`. Do not derive it from public values alone, and do not include the account class hash in the challenge; Ready-account class upgrades must not rotate the viewing key.
 - `Set Viewing Key` can legitimately fail on Sepolia if that account already has a non-zero public key registered.
 - After accepted deposits or withdrawals, discovery can lag. The UI now polls after successful transactions, but stale local state is still a common debugging angle.
 - All reads used to build a proof must be pinned to the same `proveBlock = latest - 20`. That includes `compile_actions`, `get_outgoing_channel_info`, `get_note`, and the pool nonce. `PrivacyActions.tsx` threads `proveBlock` through `compileVariants`, `getNextChannelIndex`, `getNextNoteIndex`, and `proveAndExecute` — keep that invariant if you touch either file.
