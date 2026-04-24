@@ -147,8 +147,16 @@ export function PrivacyActions({ address, signer, account, onRefreshBalance }: P
         blockNumber as any,
       );
       return note[0] !== '0x0' && note[0] !== '0';
-    } catch {
-      return false;
+    } catch (err: any) {
+      // CONTRACT_NOT_FOUND (20) and CONTRACT_ERROR (40) are the expected "note
+      // not written at this block yet" signals — keep polling. Anything else
+      // (timeout, 5xx, bad block) is a real failure.
+      const code = err?.baseError?.code ?? err?.code;
+      const message = typeof err?.message === 'string' ? err.message : '';
+      if (code === 20 || code === 40 || /contract\s*(not\s*found|error)/i.test(message)) {
+        return false;
+      }
+      throw err;
     }
   }, []);
 
