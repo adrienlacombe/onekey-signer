@@ -16,7 +16,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "starknet": "github:starkware-libs/starknet.js#PRIVACY-0.14.2-RC.2",
-    "viem": "^2.47.11"
+    "viem": "^2.51.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
